@@ -11,7 +11,7 @@ export default function DashboardPage() {
       <h1>CHARAM LEAGUE</h1>
       <p>ล็อกอินเป็น {user?.email} (role: {role ?? 'ยังไม่กำหนด'})</p>
       <p>
-        <Link to="/leagues">ไปหน้าลีก</Link>
+        <Link to="/leagues">ไปหน้าลีก</Link> · <Link to="/hall-of-fame">หอเกียรติยศ</Link>
       </p>
       <button type="button" onClick={() => signOut(auth)}>
         ออกจากระบบ

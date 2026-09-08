@@ -743,6 +743,49 @@ describe('leagues/{leagueId}/cups/{cupId}/matches/{matchId}', () => {
   })
 })
 
+describe('hallOfFame/{entryId}', () => {
+  const entryDoc = {
+    category: 'league_primary',
+    season: 1,
+    leagueId: 'superleague',
+    teamId: 't1',
+    teamName: 'Team 1',
+    managerUid: 'manager-1',
+    managerName: 'Manager 1',
+  }
+
+  it('อ่านได้แม้ไม่ login', async () => {
+    const unauth = testEnv.unauthenticatedContext()
+    await assertSucceeds(getDoc(doc(unauth.firestore(), 'hallOfFame/e1')))
+  })
+
+  it('manager สร้างเองไม่ได้', async () => {
+    const manager = testEnv.authenticatedContext('manager-1', { role: 'manager' })
+    await assertFails(setDoc(doc(manager.firestore(), 'hallOfFame/e1'), entryDoc))
+  })
+
+  it('admin สร้างได้', async () => {
+    const admin = testEnv.authenticatedContext('admin-1', { role: 'admin' })
+    await assertSucceeds(setDoc(doc(admin.firestore(), 'hallOfFame/e1'), entryDoc))
+  })
+
+  it('แก้ไม่ได้แม้เป็น admin (ผิดให้ลบสร้างใหม่ กันประวัติ snapshot ถูกแก้เงียบๆ)', async () => {
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), 'hallOfFame/e1'), entryDoc)
+    })
+    const admin = testEnv.authenticatedContext('admin-1', { role: 'admin' })
+    await assertFails(updateDoc(doc(admin.firestore(), 'hallOfFame/e1'), { season: 2 }))
+  })
+
+  it('admin ลบได้ (เผื่อกรอกผิด)', async () => {
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), 'hallOfFame/e1'), entryDoc)
+    })
+    const admin = testEnv.authenticatedContext('admin-1', { role: 'admin' })
+    await assertSucceeds(deleteDoc(doc(admin.firestore(), 'hallOfFame/e1')))
+  })
+})
+
 describe('deny-by-default', () => {
   it('collection ที่ไม่ได้กำหนด rule ไว้ ต้องถูกปฏิเสธเสมอ', async () => {
     const admin = testEnv.authenticatedContext('admin-1', { role: 'admin' })

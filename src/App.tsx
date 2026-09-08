@@ -10,6 +10,7 @@ const LeaguesListPage = lazy(() => import('@/pages/LeaguesListPage'))
 const LeagueDetailPage = lazy(() => import('@/pages/LeagueDetailPage'))
 const TeamSquadPage = lazy(() => import('@/pages/TeamSquadPage'))
 const CupDetailPage = lazy(() => import('@/pages/CupDetailPage'))
+const HallOfFamePage = lazy(() => import('@/pages/HallOfFamePage'))
 
 export default function App() {
   return (
@@ -55,6 +56,14 @@ export default function App() {
               element={
                 <ProtectedRoute>
                   <CupDetailPage />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/hall-of-fame"
+              element={
+                <ProtectedRoute>
+                  <HallOfFamePage />
                 </ProtectedRoute>
               }
             />

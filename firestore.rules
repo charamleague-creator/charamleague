@@ -139,6 +139,15 @@ service cloud.firestore {
       }
     }
 
+    // Phase 5: หอเกียรติยศ — ผูกกับ manager (ไม่ใช่ทีม) เป็น top-level collection เพราะครอบคลุมทั้งระบบ
+    // ไม่ผูกกับลีกใดลีกหนึ่ง เขียนได้เฉพาะ admin (รวมกรอกย้อนหลัง) ห้ามแก้ (แก้ผิดให้ลบสร้างใหม่ เพื่อ
+    // ไม่ให้ประวัติ snapshot ถูกเปลี่ยนแบบเงียบๆ) ลบได้เผื่อกรอกผิดจริงๆ
+    match /hallOfFame/{entryId} {
+      allow read: if true;
+      allow create, delete: if isAdmin();
+      allow update: if false;
+    }
+
     // deny-by-default: path ที่ไม่ได้ match ข้างบนจะถูกปฏิเสธเสมอ
     match /{document=**} {
       allow read, write: if false;
