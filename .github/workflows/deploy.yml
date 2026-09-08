@@ -1,0 +1,58 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    # ต้องตั้ง secret FIREBASE_SERVICE_ACCOUNT (JSON key) และ FIREBASE_PROJECT_ID ก่อนใช้งานจริง — ดู README
+    if: ${{ vars.FIREBASE_PROJECT_ID != '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run build
+        env:
+          VITE_FIREBASE_API_KEY: ${{ vars.VITE_FIREBASE_API_KEY }}
+          VITE_FIREBASE_AUTH_DOMAIN: ${{ vars.VITE_FIREBASE_AUTH_DOMAIN }}
+          VITE_FIREBASE_PROJECT_ID: ${{ vars.FIREBASE_PROJECT_ID }}
+          VITE_FIREBASE_STORAGE_BUCKET: ${{ vars.VITE_FIREBASE_STORAGE_BUCKET }}
+          VITE_FIREBASE_MESSAGING_SENDER_ID: ${{ vars.VITE_FIREBASE_MESSAGING_SENDER_ID }}
+          VITE_FIREBASE_APP_ID: ${{ vars.VITE_FIREBASE_APP_ID }}
+          VITE_USE_FIREBASE_EMULATOR: 'false'
+
+      # Pull Request -> deploy ขึ้น preview channel แยก (ไม่กระทบ production)
+      - uses: FirebaseExtended/action-hosting-deploy@v0
+        if: github.event_name == 'pull_request'
+        with:
+          repoToken: ${{ secrets.GITHUB_TOKEN }}
+          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          projectId: ${{ vars.FIREBASE_PROJECT_ID }}
+          channelId: pr-${{ github.event.number }}
+
+      # Push เข้า main -> deploy ขึ้น production จริง
+      - uses: FirebaseExtended/action-hosting-deploy@v0
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        with:
+          repoToken: ${{ secrets.GITHUB_TOKEN }}
+          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          projectId: ${{ vars.FIREBASE_PROJECT_ID }}
+          channelId: live
+
+      # deploy firestore.rules พร้อมกันตอน merge เข้า main เท่านั้น — กันลืม deploy rules ใหม่
+      - if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: echo '${{ secrets.FIREBASE_SERVICE_ACCOUNT }}' > "$RUNNER_TEMP/firebase-sa.json"
+
+      - if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: npx firebase deploy --only firestore:rules,firestore:indexes --project "${{ vars.FIREBASE_PROJECT_ID }}"
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ runner.temp }}/firebase-sa.json
