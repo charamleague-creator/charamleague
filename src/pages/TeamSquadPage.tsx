@@ -2,6 +2,7 @@ import { type FormEvent, useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import {
   addPlayer,
+  createSaleOffer,
   releasePlayer,
   removePlayer,
   subscribeLeague,
@@ -73,6 +74,33 @@ export default function TeamSquadPage() {
 
   const isOwnManager = !!user && !!team && user.uid === team.managerUid
   const canRelease = role === 'admin' || isOwnManager
+  const otherTeams = teams.filter((t) => t.id !== teamId)
+
+  async function handleProposeSale(
+    player: Player,
+    toTeamId: string,
+    price: number,
+  ) {
+    setError(null)
+    const toTeam = teams.find((t) => t.id === toTeamId)
+    if (!team || !toTeam) return
+    try {
+      await createSaleOffer(currentLeagueId, {
+        fromTeamId: currentTeamId,
+        fromTeamName: team.name,
+        toTeamId,
+        toTeamName: toTeam.name,
+        playerId: player.id,
+        playerName: player.name,
+        playerPosition: player.position,
+        playerAge: player.age,
+        price,
+        proposedBy: 'seller',
+      })
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    }
+  }
 
   return (
     <main style={{ maxWidth: 640, margin: '2rem auto' }}>
@@ -93,11 +121,56 @@ export default function TeamSquadPage() {
                 ลบ (แก้ข้อมูลผิด)
               </button>
             )}
+            {canRelease && otherTeams.length > 0 && (
+              <ProposeSaleForm
+                teams={otherTeams}
+                onSubmit={(toTeamId, price) => handleProposeSale(player, toTeamId, price)}
+              />
+            )}
           </li>
         ))}
       </ul>
       {role === 'admin' && <AddPlayerForm onSubmit={handleAdd} />}
     </main>
+  )
+}
+
+function ProposeSaleForm({
+  teams,
+  onSubmit,
+}: {
+  teams: Team[]
+  onSubmit: (toTeamId: string, price: number) => void
+}) {
+  const [toTeamId, setToTeamId] = useState(teams[0]?.id ?? '')
+  const [price, setPrice] = useState('')
+
+  function handleSubmit(e: FormEvent) {
+    e.preventDefault()
+    onSubmit(toTeamId, Number(price))
+    setPrice('')
+  }
+
+  return (
+    <form onSubmit={handleSubmit} style={{ display: 'inline' }}>
+      <select value={toTeamId} onChange={(e) => setToTeamId(e.target.value)}>
+        {teams.map((t) => (
+          <option key={t.id} value={t.id}>
+            {t.name}
+          </option>
+        ))}
+      </select>
+      <input
+        type="number"
+        min={0}
+        placeholder="ราคา"
+        value={price}
+        onChange={(e) => setPrice(e.target.value)}
+        required
+        style={{ width: '5em' }}
+      />
+      <button type="submit">เสนอขาย</button>
+    </form>
   )
 }
 

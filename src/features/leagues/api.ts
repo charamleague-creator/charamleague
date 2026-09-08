@@ -14,7 +14,17 @@ import {
 } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
 import { generateRoundRobin } from './fixtures'
-import type { FreeAgent, League, LeagueStatus, Match, Player, Team } from './types'
+import { canReceive, canSell } from './quotas'
+import type {
+  FreeAgent,
+  League,
+  LeagueStatus,
+  Match,
+  Player,
+  SaleOffer,
+  Team,
+  Transfer,
+} from './types'
 
 const BATCH_CHUNK_SIZE = 450
 
@@ -32,6 +42,12 @@ function playersCol(leagueId: string, teamId: string) {
 }
 function freeAgentsCol(leagueId: string) {
   return collection(db, 'leagues', leagueId, 'freeAgents')
+}
+function saleOffersCol(leagueId: string) {
+  return collection(db, 'leagues', leagueId, 'saleOffers')
+}
+function transfersCol(leagueId: string) {
+  return collection(db, 'leagues', leagueId, 'transfers')
 }
 
 function toLeague(snap: QueryDocumentSnapshot<DocumentData>): League {
@@ -169,6 +185,156 @@ export async function releasePlayer(leagueId: string, teamId: string, playerId: 
         fromTeamId: teamId,
         season: league.currentSeason,
       }),
+  ])
+}
+
+function toSaleOffer(snap: QueryDocumentSnapshot<DocumentData>): SaleOffer {
+  const data = snap.data()
+  return {
+    id: snap.id,
+    season: data.season,
+    fromTeamId: data.fromTeamId,
+    fromTeamName: data.fromTeamName,
+    toTeamId: data.toTeamId,
+    toTeamName: data.toTeamName,
+    playerId: data.playerId,
+    playerName: data.playerName,
+    playerPosition: data.playerPosition,
+    playerAge: data.playerAge,
+    price: data.price,
+    status: data.status,
+    proposedBy: data.proposedBy,
+  }
+}
+
+function toTransfer(snap: QueryDocumentSnapshot<DocumentData>): Transfer {
+  const data = snap.data()
+  return {
+    id: snap.id,
+    season: data.season,
+    type: data.type,
+    fromTeamId: data.fromTeamId,
+    toTeamId: data.toTeamId,
+    playerId: data.playerId,
+    playerName: data.playerName,
+    price: data.price,
+  }
+}
+
+export function subscribeSaleOffers(leagueId: string, onChange: (offers: SaleOffer[]) => void) {
+  return onSnapshot(saleOffersCol(leagueId), (snap) => onChange(snap.docs.map(toSaleOffer)))
+}
+
+export function subscribeSeasonTransfers(
+  leagueId: string,
+  season: number,
+  onChange: (transfers: Transfer[]) => void,
+) {
+  const q = query(transfersCol(leagueId), where('season', '==', season))
+  return onSnapshot(q, (snap) => onChange(snap.docs.map(toTransfer)))
+}
+
+/**
+ * เสนอขายตรง (ขายย่อย) — ทีมใดทีมหนึ่ง (ผู้ขายหรือผู้ซื้อ) เสนอราคาก่อน
+ * ยังไม่ย้ายผู้เล่นจริงจนกว่าอีกฝ่ายจะกด "ยอมรับ" แล้วแอดมิน "ปิดการขาย" (completeSale)
+ */
+export async function createSaleOffer(
+  leagueId: string,
+  input: {
+    fromTeamId: string
+    fromTeamName: string
+    toTeamId: string
+    toTeamName: string
+    playerId: string
+    playerName: string
+    playerPosition: Player['position']
+    playerAge: number
+    price: number
+    proposedBy: 'seller' | 'buyer'
+  },
+): Promise<void> {
+  const leagueSnap = await getDoc(doc(db, 'leagues', leagueId))
+  if (!leagueSnap.exists()) throw new Error('ไม่พบลีก')
+  const league = toLeague(leagueSnap as QueryDocumentSnapshot<DocumentData>)
+  if (league.status !== 'in_season')
+    throw new Error('เสนอซื้อ-ขายนักเตะได้เฉพาะตอนลีกกำลังแข่งขันเท่านั้น')
+  if (input.fromTeamId === input.toTeamId) throw new Error('ทีมต้นทางและปลายทางต้องไม่ใช่ทีมเดียวกัน')
+
+  await addDoc(saleOffersCol(leagueId), {
+    ...input,
+    season: league.currentSeason,
+    status: 'pending',
+  })
+}
+
+export async function respondToSaleOffer(
+  leagueId: string,
+  offerId: string,
+  status: 'accepted' | 'rejected' | 'cancelled',
+): Promise<void> {
+  await commitInChunks([
+    (batch) => batch.update(doc(db, 'leagues', leagueId, 'saleOffers', offerId), { status }),
+  ])
+}
+
+/**
+ * แอดมินปิดการขาย — ย้ายผู้เล่นจริง (คง playerId เดิม) + เช็คโควตาก่อนบันทึกเสมอ (guideline #5)
+ * ต้องทำโดยแอดมินเพราะ Firestore Rules ตรวจข้าม "ทีมสองทีม" พร้อมกัน (ลบจากทีม A + สร้างในทีม B)
+ * ในการเขียนเดียวกันไม่ได้ ถ้าไม่ผ่านสิทธิ์ admin ที่ bypass ทั้งสองฝั่งอยู่แล้ว
+ */
+export async function completeSale(leagueId: string, offerId: string): Promise<void> {
+  const [leagueSnap, offerSnap] = await Promise.all([
+    getDoc(doc(db, 'leagues', leagueId)),
+    getDoc(doc(db, 'leagues', leagueId, 'saleOffers', offerId)),
+  ])
+  if (!leagueSnap.exists()) throw new Error('ไม่พบลีก')
+  if (!offerSnap.exists()) throw new Error('ไม่พบข้อเสนอ')
+  const league = toLeague(leagueSnap as QueryDocumentSnapshot<DocumentData>)
+  const offer = toSaleOffer(offerSnap as QueryDocumentSnapshot<DocumentData>)
+  if (league.status !== 'in_season')
+    throw new Error('ปิดการขายได้เฉพาะตอนลีกกำลังแข่งขันเท่านั้น')
+  if (offer.status !== 'accepted') throw new Error('ต้องรอให้อีกทีมยอมรับข้อเสนอก่อน')
+
+  const transfersSnap = await getDocs(
+    query(transfersCol(leagueId), where('season', '==', league.currentSeason)),
+  )
+  const transfers = transfersSnap.docs.map(toTransfer)
+
+  const sellCheck = canSell(transfers, offer.fromTeamId, league.currentSeason, 'simple_sale')
+  if (!sellCheck.allowed) throw new Error(sellCheck.reason)
+  const receiveCheck = canReceive(transfers, offer.toTeamId, league.currentSeason)
+  if (!receiveCheck.allowed) throw new Error(receiveCheck.reason)
+
+  const playerSnap = await getDoc(
+    doc(db, 'leagues', leagueId, 'teams', offer.fromTeamId, 'players', offer.playerId),
+  )
+  if (!playerSnap.exists()) throw new Error('ไม่พบผู้เล่นในทีมต้นทาง (อาจถูกย้ายไปแล้ว)')
+  const player = toPlayer(playerSnap as QueryDocumentSnapshot<DocumentData>)
+
+  await commitInChunks([
+    (batch) =>
+      batch.delete(
+        doc(db, 'leagues', leagueId, 'teams', offer.fromTeamId, 'players', offer.playerId),
+      ),
+    (batch) =>
+      batch.set(doc(db, 'leagues', leagueId, 'teams', offer.toTeamId, 'players', offer.playerId), {
+        name: player.name,
+        position: player.position,
+        age: player.age,
+        joinedSeason: player.joinedSeason,
+      }),
+    (batch) =>
+      batch.set(doc(transfersCol(leagueId)), {
+        season: league.currentSeason,
+        type: 'simple_sale',
+        fromTeamId: offer.fromTeamId,
+        toTeamId: offer.toTeamId,
+        playerId: offer.playerId,
+        playerName: player.name,
+        price: offer.price,
+      }),
+    (batch) =>
+      batch.update(doc(db, 'leagues', leagueId, 'saleOffers', offerId), { status: 'completed' }),
   ])
 }
 

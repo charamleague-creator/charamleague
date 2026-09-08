@@ -1,18 +1,21 @@
 import { type FormEvent, useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import {
+  completeSale,
   createTeam,
   endSeason,
   reportMatchResult,
+  respondToSaleOffer,
   setTeamForfeited,
   startNewSeason,
   subscribeFreeAgents,
   subscribeLeague,
+  subscribeSaleOffers,
   subscribeSeasonMatches,
   subscribeTeams,
 } from '@/features/leagues/api'
 import { computeStandings } from '@/features/leagues/standings'
-import type { FreeAgent, League, Match, Team } from '@/features/leagues/types'
+import type { FreeAgent, League, Match, SaleOffer, Team } from '@/features/leagues/types'
 import { useAuth } from '@/hooks/useAuth'
 
 export default function LeagueDetailPage() {
@@ -22,6 +25,7 @@ export default function LeagueDetailPage() {
   const [teams, setTeams] = useState<Team[]>([])
   const [matches, setMatches] = useState<Match[]>([])
   const [freeAgents, setFreeAgents] = useState<FreeAgent[]>([])
+  const [saleOffers, setSaleOffers] = useState<SaleOffer[]>([])
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
@@ -42,6 +46,11 @@ export default function LeagueDetailPage() {
   useEffect(() => {
     if (!leagueId) return
     return subscribeFreeAgents(leagueId, setFreeAgents)
+  }, [leagueId])
+
+  useEffect(() => {
+    if (!leagueId) return
+    return subscribeSaleOffers(leagueId, setSaleOffers)
   }, [leagueId])
 
   if (!leagueId || !league) return <main style={{ margin: '2rem' }}>กำลังโหลด...</main>
@@ -144,6 +153,50 @@ export default function LeagueDetailPage() {
             (ฤดูกาล {agent.releasedSeason})
           </li>
         ))}
+      </ul>
+
+      <h2>ข้อเสนอซื้อขาย</h2>
+      <ul>
+        {saleOffers.length === 0 && <li>ไม่มีข้อเสนอ</li>}
+        {saleOffers.map((offer) => {
+          const involved =
+            !!user &&
+            (teamsById.get(offer.fromTeamId)?.managerUid === user.uid ||
+              teamsById.get(offer.toTeamId)?.managerUid === user.uid)
+          return (
+            <li key={offer.id}>
+              {offer.fromTeamName} เสนอขาย {offer.playerName} ({offer.playerPosition}) ให้{' '}
+              {offer.toTeamName} ที่ราคา {offer.price} — สถานะ: {offer.status}
+              {offer.status === 'pending' && (role === 'admin' || involved) && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => run(() => respondToSaleOffer(leagueId, offer.id, 'accepted'))}
+                  >
+                    ยอมรับ
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => run(() => respondToSaleOffer(leagueId, offer.id, 'rejected'))}
+                  >
+                    ปฏิเสธ
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => run(() => respondToSaleOffer(leagueId, offer.id, 'cancelled'))}
+                  >
+                    ยกเลิก
+                  </button>
+                </>
+              )}
+              {offer.status === 'accepted' && role === 'admin' && (
+                <button type="button" onClick={() => run(() => completeSale(leagueId, offer.id))}>
+                  ปิดการขาย (ย้ายผู้เล่นจริง)
+                </button>
+              )}
+            </li>
+          )
+        })}
       </ul>
 
       {role === 'admin' && (

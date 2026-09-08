@@ -63,6 +63,30 @@ service cloud.firestore {
         allow update, delete: if false;
       }
 
+      // Phase 2.3: ขายตรงระหว่างทีม — เสนอราคาได้ทั้งผู้ขาย/ผู้ซื้อ (ทีมใดทีมหนึ่งที่เกี่ยวข้อง)
+      // อีกฝ่ายเปลี่ยนได้แค่ field status (ยอมรับ/ปฏิเสธ/ยกเลิก) ห้ามพ่วงแก้ field อื่น
+      // การย้ายผู้เล่นจริง (ข้ามสิทธิ์ 2 ทีม) ให้ผ่าน completeSale ที่ admin เท่านั้นเป็นคนกด
+      match /saleOffers/{offerId} {
+        allow read: if true;
+        allow create: if isAdmin() ||
+          managesTeam(database, leagueId, request.resource.data.fromTeamId) ||
+          managesTeam(database, leagueId, request.resource.data.toTeamId);
+        allow update: if isAdmin() || (
+          (managesTeam(database, leagueId, resource.data.fromTeamId) ||
+           managesTeam(database, leagueId, resource.data.toTeamId)) &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status'])
+        );
+        allow delete: if isAdmin();
+      }
+
+      // Phase 2.3: ประวัติการโอนที่สำเร็จแล้ว (ขายย่อย+ประมูลในอนาคต) ใช้คำนวณโควตาสด
+      // เขียนได้เฉพาะ admin เพราะเกิดจาก completeSale เท่านั้น ห้ามแก้/ลบ (immutable event log)
+      match /transfers/{transferId} {
+        allow read: if true;
+        allow create: if isAdmin();
+        allow update, delete: if false;
+      }
+
       match /matches/{matchId} {
         allow read: if true;
         allow create, delete: if isAdmin();
