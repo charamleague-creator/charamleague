@@ -13,6 +13,7 @@ import {
   where,
   writeBatch,
 } from 'firebase/firestore'
+import { buildCurrentAdminLogWrite } from '@/features/adminLog/api'
 import { db } from '@/lib/firebase'
 import { generateRoundRobin } from './fixtures'
 import { canReceive, canSell } from './quotas'
@@ -340,6 +341,14 @@ export async function completeSale(leagueId: string, offerId: string): Promise<v
       }),
     (batch) =>
       batch.update(doc(db, 'leagues', leagueId, 'saleOffers', offerId), { status: 'completed' }),
+    buildCurrentAdminLogWrite('complete_sale', {
+      leagueId,
+      offerId,
+      fromTeamId: offer.fromTeamId,
+      toTeamId: offer.toTeamId,
+      playerId: offer.playerId,
+      price: offer.price,
+    }),
   ])
 }
 
@@ -438,6 +447,7 @@ export async function approveAuctionListing(leagueId: string, listingId: string)
   await commitInChunks([
     (batch) =>
       batch.update(doc(db, 'leagues', leagueId, 'auctionListings', listingId), { status: 'open' }),
+    buildCurrentAdminLogWrite('approve_auction_listing', { leagueId, listingId }),
   ])
 }
 
@@ -447,6 +457,7 @@ export async function rejectAuctionListing(leagueId: string, listingId: string):
       batch.update(doc(db, 'leagues', leagueId, 'auctionListings', listingId), {
         status: 'rejected',
       }),
+    buildCurrentAdminLogWrite('reject_auction_listing', { leagueId, listingId }),
   ])
 }
 
@@ -497,6 +508,7 @@ export async function closeAuction(leagueId: string, listingId: string): Promise
         batch.update(doc(db, 'leagues', leagueId, 'auctionListings', listingId), {
           status: 'closed_no_winner',
         }),
+      buildCurrentAdminLogWrite('close_auction_no_winner', { leagueId, listingId }),
     ])
     return
   }
@@ -551,6 +563,12 @@ export async function closeAuction(leagueId: string, listingId: string): Promise
       batch.update(doc(db, 'leagues', leagueId, 'auctionListings', listingId), {
         status: 'closed',
       }),
+    buildCurrentAdminLogWrite('close_auction', {
+      leagueId,
+      listingId,
+      winnerTeamId: listing.highestBidderTeamId,
+      price: listing.highestBid,
+    }),
   ])
 }
 
@@ -580,11 +598,16 @@ export function subscribeSeasonMatches(
 }
 
 export async function createLeague(name: string): Promise<string> {
-  const ref = await addDoc(leaguesCol(), {
-    name,
-    status: 'transfer_window' satisfies LeagueStatus,
-    currentSeason: 1,
-  })
+  const ref = doc(leaguesCol())
+  await commitInChunks([
+    (batch) =>
+      batch.set(ref, {
+        name,
+        status: 'transfer_window' satisfies LeagueStatus,
+        currentSeason: 1,
+      }),
+    buildCurrentAdminLogWrite('create_league', { leagueId: ref.id, name }),
+  ])
   return ref.id
 }
 
@@ -598,7 +621,10 @@ export async function deleteLeague(leagueId: string): Promise<void> {
     ...matchDocs.docs.map((d) => d.ref),
     doc(db, 'leagues', leagueId),
   ]
-  await commitInChunks(refsToDelete.map((ref) => (batch) => batch.delete(ref)))
+  await commitInChunks([
+    ...refsToDelete.map((ref) => (batch: ReturnType<typeof writeBatch>) => batch.delete(ref)),
+    buildCurrentAdminLogWrite('delete_league', { leagueId }),
+  ])
 }
 
 export async function createTeam(
@@ -615,6 +641,7 @@ export async function setTeamForfeited(
 ): Promise<void> {
   await commitInChunks([
     (batch) => batch.update(doc(db, 'leagues', leagueId, 'teams', teamId), { isForfeited }),
+    buildCurrentAdminLogWrite('set_team_forfeited', { leagueId, teamId, isForfeited }),
   ])
 }
 
@@ -689,6 +716,13 @@ export async function endSeason(leagueId: string): Promise<void> {
   writes.push((batch) =>
     batch.update(doc(db, 'leagues', leagueId), { status: 'transfer_window' }),
   )
+  writes.push(
+    buildCurrentAdminLogWrite('end_season', {
+      leagueId,
+      season: league.currentSeason,
+      byeMatches: scheduled.length,
+    }),
+  )
   await commitInChunks(writes)
 }
 
@@ -744,6 +778,9 @@ export async function startNewSeason(leagueId: string): Promise<void> {
   }
   writes.push((batch) =>
     batch.update(doc(db, 'leagues', leagueId), { currentSeason: newSeason, status: 'in_season' }),
+  )
+  writes.push(
+    buildCurrentAdminLogWrite('start_new_season', { leagueId, newSeason, teamCount: teams.length }),
   )
   await commitInChunks(writes)
 }

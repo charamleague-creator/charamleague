@@ -12,6 +12,12 @@ export default function DashboardPage() {
       <p>ล็อกอินเป็น {user?.email} (role: {role ?? 'ยังไม่กำหนด'})</p>
       <p>
         <Link to="/leagues">ไปหน้าลีก</Link> · <Link to="/hall-of-fame">หอเกียรติยศ</Link>
+        {role === 'admin' && (
+          <>
+            {' '}
+            · <Link to="/admin/activity-log">Log กิจกรรมแอดมิน</Link>
+          </>
+        )}
       </p>
       <button type="button" onClick={() => signOut(auth)}>
         ออกจากระบบ

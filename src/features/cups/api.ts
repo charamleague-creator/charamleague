@@ -8,6 +8,7 @@ import {
   onSnapshot,
   writeBatch,
 } from 'firebase/firestore'
+import { buildCurrentAdminLogWrite } from '@/features/adminLog/api'
 import { db } from '@/lib/firebase'
 import { generateBracket, updateCupMatchResult } from './bracket'
 import type { Cup, CupMatch, CupType } from './types'
@@ -95,6 +96,13 @@ export async function createCup(
       (m) => (batch: ReturnType<typeof writeBatch>) =>
         batch.set(doc(cupMatchesCol(leagueId, cupRef.id), matchId(m.round, m.slot)), m),
     ),
+    buildCurrentAdminLogWrite('create_cup', {
+      leagueId,
+      cupId: cupRef.id,
+      name: input.name,
+      type: input.type,
+      teamCount: input.teamIds.length,
+    }),
   ])
   return cupRef.id
 }
@@ -118,6 +126,8 @@ export async function reportCupMatchResult(
 
   const matchesSnap = await getDocs(cupMatchesCol(leagueId, cupId))
   const before = matchesSnap.docs.map(toCupMatch)
+  const wasAlreadyDecided = !!before.find((m) => m.round === round && m.slot === slot)
+    ?.winnerTeamId
   const after = updateCupMatchResult(before, round, slot, homeScore, awayScore)
 
   const beforeById = new Map(before.map((m) => [matchId(m.round, m.slot), m]))
@@ -135,6 +145,12 @@ export async function reportCupMatchResult(
     batch.update(doc(db, 'leagues', leagueId, 'cups', cupId), {
       status: final?.winnerTeamId ? 'completed' : 'in_progress',
     }),
+  )
+  writes.push(
+    buildCurrentAdminLogWrite(
+      wasAlreadyDecided ? 'edit_cup_match_result' : 'report_cup_match_result',
+      { leagueId, cupId, round, slot, homeScore, awayScore },
+    ),
   )
 
   await commitInChunks(writes)

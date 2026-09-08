@@ -1,13 +1,13 @@
 import {
   type DocumentData,
   type QueryDocumentSnapshot,
-  addDoc,
   collection,
-  deleteDoc,
   doc,
   getDocs,
   onSnapshot,
+  writeBatch,
 } from 'firebase/firestore'
+import { buildCurrentAdminLogWrite } from '@/features/adminLog/api'
 import { db } from '@/lib/firebase'
 import { isFirstChampionshipForManager } from './helpers'
 import type { HallOfFameEntry } from './types'
@@ -56,10 +56,24 @@ export async function addHallOfFameEntry(input: {
     input.category,
   )
 
-  await addDoc(hallOfFameCol(), input)
+  const ref = doc(hallOfFameCol())
+  const batch = writeBatch(db)
+  batch.set(ref, input)
+  buildCurrentAdminLogWrite('add_hall_of_fame_entry', {
+    entryId: ref.id,
+    category: input.category,
+    season: input.season,
+    managerUid: input.managerUid,
+    isFirstChampionship,
+  })(batch)
+  await batch.commit()
+
   return { isFirstChampionship }
 }
 
 export async function removeHallOfFameEntry(entryId: string): Promise<void> {
-  await deleteDoc(doc(db, 'hallOfFame', entryId))
+  const batch = writeBatch(db)
+  batch.delete(doc(db, 'hallOfFame', entryId))
+  buildCurrentAdminLogWrite('remove_hall_of_fame_entry', { entryId })(batch)
+  await batch.commit()
 }

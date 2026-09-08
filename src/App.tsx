@@ -11,6 +11,7 @@ const LeagueDetailPage = lazy(() => import('@/pages/LeagueDetailPage'))
 const TeamSquadPage = lazy(() => import('@/pages/TeamSquadPage'))
 const CupDetailPage = lazy(() => import('@/pages/CupDetailPage'))
 const HallOfFamePage = lazy(() => import('@/pages/HallOfFamePage'))
+const AdminActivityLogPage = lazy(() => import('@/pages/AdminActivityLogPage'))
 
 export default function App() {
   return (
@@ -64,6 +65,14 @@ export default function App() {
               element={
                 <ProtectedRoute>
                   <HallOfFamePage />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/admin/activity-log"
+              element={
+                <ProtectedRoute>
+                  <AdminActivityLogPage />
                 </ProtectedRoute>
               }
             />

@@ -786,6 +786,55 @@ describe('hallOfFame/{entryId}', () => {
   })
 })
 
+describe('adminActivityLog/{logId}', () => {
+  const logDoc = {
+    actorUid: 'admin-1',
+    actorEmail: 'admin1@test.local',
+    action: 'end_season',
+    details: { leagueId: 'superleague' },
+  }
+
+  it('manager อ่านไม่ได้ (ไม่ public)', async () => {
+    const manager = testEnv.authenticatedContext('manager-1', { role: 'manager' })
+    await assertFails(getDoc(doc(manager.firestore(), 'adminActivityLog/x1')))
+  })
+
+  it('admin อ่านได้', async () => {
+    const admin = testEnv.authenticatedContext('admin-1', { role: 'admin' })
+    await assertSucceeds(getDoc(doc(admin.firestore(), 'adminActivityLog/x1')))
+  })
+
+  it('admin เขียน log ของตัวเองได้', async () => {
+    const admin = testEnv.authenticatedContext('admin-1', { role: 'admin' })
+    await assertSucceeds(setDoc(doc(admin.firestore(), 'adminActivityLog/x1'), logDoc))
+  })
+
+  it('admin ปลอม actorUid เป็นคนอื่นไม่ได้', async () => {
+    const admin = testEnv.authenticatedContext('admin-1', { role: 'admin' })
+    await assertFails(
+      setDoc(doc(admin.firestore(), 'adminActivityLog/x1'), { ...logDoc, actorUid: 'admin-2' }),
+    )
+  })
+
+  it('manager เขียนไม่ได้เลย', async () => {
+    const manager = testEnv.authenticatedContext('manager-1', { role: 'manager' })
+    await assertFails(
+      setDoc(doc(manager.firestore(), 'adminActivityLog/x1'), { ...logDoc, actorUid: 'manager-1' }),
+    )
+  })
+
+  it('แก้/ลบไม่ได้แม้เป็น admin (audit log ต้อง immutable)', async () => {
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), 'adminActivityLog/x1'), logDoc)
+    })
+    const admin = testEnv.authenticatedContext('admin-1', { role: 'admin' })
+    await assertFails(
+      updateDoc(doc(admin.firestore(), 'adminActivityLog/x1'), { action: 'tampered' }),
+    )
+    await assertFails(deleteDoc(doc(admin.firestore(), 'adminActivityLog/x1')))
+  })
+})
+
 describe('deny-by-default', () => {
   it('collection ที่ไม่ได้กำหนด rule ไว้ ต้องถูกปฏิเสธเสมอ', async () => {
     const admin = testEnv.authenticatedContext('admin-1', { role: 'admin' })

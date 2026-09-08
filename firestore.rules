@@ -148,6 +148,15 @@ service cloud.firestore {
       allow update: if false;
     }
 
+    // Phase 6: log กิจกรรมแอดมิน (ข้อ 5.6) — อ่านได้เฉพาะ admin (ไม่ public เพราะเผยรายละเอียดการดำเนินงาน)
+    // เขียนได้เฉพาะ admin และต้องเป็นการ log การกระทำของตัวเองเท่านั้น (กัน uid ปลอมว่าเป็นคนอื่นทำ)
+    // ห้ามแก้/ลบเด็ดขาด (audit log ที่แก้ได้ก็ไม่มีประโยชน์อะไร)
+    match /adminActivityLog/{logId} {
+      allow read: if isAdmin();
+      allow create: if isAdmin() && request.resource.data.actorUid == request.auth.uid;
+      allow update, delete: if false;
+    }
+
     // deny-by-default: path ที่ไม่ได้ match ข้างบนจะถูกปฏิเสธเสมอ
     match /{document=**} {
       allow read, write: if false;
