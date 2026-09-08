@@ -3,6 +3,7 @@ import {
   type QueryDocumentSnapshot,
   addDoc,
   collection,
+  deleteDoc,
   doc,
   getDoc,
   getDocs,
@@ -13,7 +14,7 @@ import {
 } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
 import { generateRoundRobin } from './fixtures'
-import type { League, LeagueStatus, Match, Team } from './types'
+import type { League, LeagueStatus, Match, Player, Team } from './types'
 
 const BATCH_CHUNK_SIZE = 450
 
@@ -25,6 +26,9 @@ function teamsCol(leagueId: string) {
 }
 function matchesCol(leagueId: string) {
   return collection(db, 'leagues', leagueId, 'matches')
+}
+function playersCol(leagueId: string, teamId: string) {
+  return collection(db, 'leagues', leagueId, 'teams', teamId, 'players')
 }
 
 function toLeague(snap: QueryDocumentSnapshot<DocumentData>): League {
@@ -60,6 +64,41 @@ function toMatch(snap: QueryDocumentSnapshot<DocumentData>): Match {
     awayScore: data.awayScore,
     winnerTeamId: data.winnerTeamId,
   }
+}
+
+function toPlayer(snap: QueryDocumentSnapshot<DocumentData>): Player {
+  const data = snap.data()
+  return {
+    id: snap.id,
+    name: data.name,
+    position: data.position,
+    age: data.age,
+    joinedSeason: data.joinedSeason,
+  }
+}
+
+export function subscribePlayers(
+  leagueId: string,
+  teamId: string,
+  onChange: (players: Player[]) => void,
+) {
+  return onSnapshot(playersCol(leagueId, teamId), (snap) => onChange(snap.docs.map(toPlayer)))
+}
+
+export async function addPlayer(
+  leagueId: string,
+  teamId: string,
+  input: { name: string; position: Player['position']; age: number; joinedSeason: number },
+): Promise<void> {
+  await addDoc(playersCol(leagueId, teamId), input)
+}
+
+export async function removePlayer(
+  leagueId: string,
+  teamId: string,
+  playerId: string,
+): Promise<void> {
+  await deleteDoc(doc(db, 'leagues', leagueId, 'teams', teamId, 'players', playerId))
 }
 
 export function subscribeLeagues(onChange: (leagues: League[]) => void) {

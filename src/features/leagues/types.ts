@@ -30,6 +30,16 @@ export interface Match {
   winnerTeamId: string | null
 }
 
+export type PlayerPosition = 'GK' | 'DF' | 'MF' | 'FW'
+
+export interface Player {
+  id: string
+  name: string
+  position: PlayerPosition
+  age: number
+  joinedSeason: number
+}
+
 export interface StandingsRow {
   teamId: string
   teamName: string

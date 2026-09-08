@@ -8,6 +8,7 @@ const DashboardPage = lazy(() => import('@/pages/DashboardPage'))
 const NotFoundPage = lazy(() => import('@/pages/NotFoundPage'))
 const LeaguesListPage = lazy(() => import('@/pages/LeaguesListPage'))
 const LeagueDetailPage = lazy(() => import('@/pages/LeagueDetailPage'))
+const TeamSquadPage = lazy(() => import('@/pages/TeamSquadPage'))
 
 export default function App() {
   return (
@@ -37,6 +38,14 @@ export default function App() {
               element={
                 <ProtectedRoute>
                   <LeagueDetailPage />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/leagues/:leagueId/teams/:teamId"
+              element={
+                <ProtectedRoute>
+                  <TeamSquadPage />
                 </ProtectedRoute>
               }
             />

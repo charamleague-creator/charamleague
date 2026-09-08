@@ -88,6 +88,39 @@ describe('leagues/{leagueId}/teams/{teamId}', () => {
   })
 })
 
+describe('leagues/{leagueId}/teams/{teamId}/players/{playerId}', () => {
+  it('อ่านได้แม้ไม่ login', async () => {
+    const unauth = testEnv.unauthenticatedContext()
+    await assertSucceeds(
+      getDoc(doc(unauth.firestore(), 'leagues/superleague/teams/t1/players/p1')),
+    )
+  })
+
+  it('manager (แม้เจ้าของทีม) เขียนไม่ได้', async () => {
+    const manager = testEnv.authenticatedContext('manager-1', { role: 'manager' })
+    await assertFails(
+      setDoc(doc(manager.firestore(), 'leagues/superleague/teams/t1/players/p1'), {
+        name: 'Player 1',
+        position: 'MF',
+        age: 20,
+        joinedSeason: 1,
+      }),
+    )
+  })
+
+  it('admin เขียนได้', async () => {
+    const admin = testEnv.authenticatedContext('admin-1', { role: 'admin' })
+    await assertSucceeds(
+      setDoc(doc(admin.firestore(), 'leagues/superleague/teams/t1/players/p1'), {
+        name: 'Player 1',
+        position: 'MF',
+        age: 20,
+        joinedSeason: 1,
+      }),
+    )
+  })
+})
+
 describe('leagues/{leagueId}/matches/{matchId} — สร้าง fixture', () => {
   it('admin สร้าง match ได้', async () => {
     const admin = testEnv.authenticatedContext('admin-1', { role: 'admin' })

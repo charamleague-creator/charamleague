@@ -1,5 +1,5 @@
 import { type FormEvent, useEffect, useState } from 'react'
-import { useParams } from 'react-router-dom'
+import { Link, useParams } from 'react-router-dom'
 import {
   createTeam,
   endSeason,
@@ -90,7 +90,7 @@ export default function LeagueDetailPage() {
           {standings.map((row) => (
             <tr key={row.teamId}>
               <td>
-                {row.teamName}
+                <Link to={`/leagues/${leagueId}/teams/${row.teamId}`}>{row.teamName}</Link>
                 {teamsById.get(row.teamId)?.isForfeited && ' (ฟอส)'}
               </td>
               <td>{row.played}</td>
