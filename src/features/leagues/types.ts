@@ -82,6 +82,29 @@ export interface Transfer {
   price: number
 }
 
+export type AuctionListingStatus =
+  | 'pending_approval'
+  | 'open'
+  | 'closed'
+  | 'closed_no_winner'
+  | 'rejected'
+
+export interface AuctionListing {
+  id: string
+  season: number
+  sellerTeamId: string
+  sellerTeamName: string
+  playerId: string
+  playerName: string
+  playerPosition: PlayerPosition
+  playerAge: number
+  startingPrice: number
+  status: AuctionListingStatus
+  highestBid: number | null
+  highestBidderTeamId: string | null
+  highestBidderTeamName: string | null
+}
+
 export interface StandingsRow {
   teamId: string
   teamName: string

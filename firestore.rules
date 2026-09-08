@@ -87,6 +87,31 @@ service cloud.firestore {
         allow update, delete: if false;
       }
 
+      // Phase 2.4: ประมูล — ทีมขายส่งเข้าคิว (pending_approval), แอดมินอนุมัติ/ปฏิเสธ/ปิดประมูล
+      // (สร้าง/แก้ status ตอน approve/reject/close เป็นสิทธิ์ admin เท่านั้น ตามที่เอกสารกำหนด)
+      // manager ประมูลได้เอง แต่แก้ได้แค่ 3 field ราคา/ผู้ประมูลสูงสุด ตอนสถานะเป็น open เท่านั้น
+      // ห้ามประมูลทีมตัวเอง และราคาต้องสูงกว่าราคาปัจจุบันเสมอ (เช็คซ้ำฝั่ง client ด้วย transaction)
+      match /auctionListings/{listingId} {
+        allow read: if true;
+        allow create: if isAdmin() ||
+          managesTeam(database, leagueId, request.resource.data.sellerTeamId);
+        allow update: if isAdmin() || (
+          isSignedIn() &&
+          resource.data.status == 'open' &&
+          request.resource.data.status == 'open' &&
+          request.resource.data.highestBidderTeamId != resource.data.sellerTeamId &&
+          managesTeam(database, leagueId, request.resource.data.highestBidderTeamId) &&
+          request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['highestBid', 'highestBidderTeamId', 'highestBidderTeamName']) &&
+          request.resource.data.highestBid > (
+            resource.data.highestBid == null
+              ? resource.data.startingPrice - 1
+              : resource.data.highestBid
+          )
+        );
+        allow delete: if isAdmin();
+      }
+
       match /matches/{matchId} {
         allow read: if true;
         allow create, delete: if isAdmin();

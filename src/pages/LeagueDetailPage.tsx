@@ -1,13 +1,18 @@
 import { type FormEvent, useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import {
+  approveAuctionListing,
+  closeAuction,
   completeSale,
   createTeam,
   endSeason,
+  placeBid,
+  rejectAuctionListing,
   reportMatchResult,
   respondToSaleOffer,
   setTeamForfeited,
   startNewSeason,
+  subscribeAuctionListings,
   subscribeFreeAgents,
   subscribeLeague,
   subscribeSaleOffers,
@@ -15,7 +20,14 @@ import {
   subscribeTeams,
 } from '@/features/leagues/api'
 import { computeStandings } from '@/features/leagues/standings'
-import type { FreeAgent, League, Match, SaleOffer, Team } from '@/features/leagues/types'
+import type {
+  AuctionListing,
+  FreeAgent,
+  League,
+  Match,
+  SaleOffer,
+  Team,
+} from '@/features/leagues/types'
 import { useAuth } from '@/hooks/useAuth'
 
 export default function LeagueDetailPage() {
@@ -26,6 +38,7 @@ export default function LeagueDetailPage() {
   const [matches, setMatches] = useState<Match[]>([])
   const [freeAgents, setFreeAgents] = useState<FreeAgent[]>([])
   const [saleOffers, setSaleOffers] = useState<SaleOffer[]>([])
+  const [auctionListings, setAuctionListings] = useState<AuctionListing[]>([])
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
@@ -53,10 +66,16 @@ export default function LeagueDetailPage() {
     return subscribeSaleOffers(leagueId, setSaleOffers)
   }, [leagueId])
 
+  useEffect(() => {
+    if (!leagueId) return
+    return subscribeAuctionListings(leagueId, setAuctionListings)
+  }, [leagueId])
+
   if (!leagueId || !league) return <main style={{ margin: '2rem' }}>กำลังโหลด...</main>
 
   const teamsById = new Map(teams.map((t) => [t.id, t]))
   const standings = computeStandings(matches, teams)
+  const myTeam = teams.find((t) => !!user && t.managerUid === user.uid)
 
   async function run(action: () => Promise<void>) {
     setError(null)
@@ -199,6 +218,52 @@ export default function LeagueDetailPage() {
         })}
       </ul>
 
+      <h2>ประมูล</h2>
+      <ul>
+        {auctionListings.length === 0 && <li>ไม่มีรายการประมูล</li>}
+        {auctionListings.map((listing) => {
+          const canBid =
+            listing.status === 'open' && !!myTeam && myTeam.id !== listing.sellerTeamId
+          return (
+            <li key={listing.id}>
+              {listing.sellerTeamName} ส่ง {listing.playerName} ({listing.playerPosition}) เข้าประมูล
+              ราคาเริ่ม {listing.startingPrice} — สถานะ: {listing.status}
+              {listing.highestBid !== null &&
+                ` (สูงสุด ${listing.highestBid} โดย ${listing.highestBidderTeamName})`}
+              {listing.status === 'pending_approval' && role === 'admin' && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => run(() => approveAuctionListing(leagueId, listing.id))}
+                  >
+                    อนุมัติ
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => run(() => rejectAuctionListing(leagueId, listing.id))}
+                  >
+                    ปฏิเสธ
+                  </button>
+                </>
+              )}
+              {canBid && myTeam && (
+                <BidForm
+                  minAmount={(listing.highestBid ?? listing.startingPrice - 1) + 1}
+                  onSubmit={(amount) =>
+                    run(() => placeBid(leagueId, listing.id, myTeam.id, myTeam.name, amount))
+                  }
+                />
+              )}
+              {listing.status === 'open' && role === 'admin' && (
+                <button type="button" onClick={() => run(() => closeAuction(leagueId, listing.id))}>
+                  ปิดประมูล
+                </button>
+              )}
+            </li>
+          )
+        })}
+      </ul>
+
       {role === 'admin' && (
         <section>
           <h2>จัดการทีม</h2>
@@ -255,6 +320,35 @@ function ScoreForm({ onSubmit }: { onSubmit: (homeScore: number, awayScore: numb
         style={{ width: '3em' }}
       />
       <button type="submit">บันทึกผล</button>
+    </form>
+  )
+}
+
+function BidForm({
+  minAmount,
+  onSubmit,
+}: {
+  minAmount: number
+  onSubmit: (amount: number) => void
+}) {
+  const [amount, setAmount] = useState(String(minAmount))
+
+  function handleSubmit(e: FormEvent) {
+    e.preventDefault()
+    onSubmit(Number(amount))
+  }
+
+  return (
+    <form onSubmit={handleSubmit} style={{ display: 'inline' }}>
+      <input
+        type="number"
+        min={minAmount}
+        value={amount}
+        onChange={(e) => setAmount(e.target.value)}
+        required
+        style={{ width: '6em' }}
+      />
+      <button type="submit">ประมูล</button>
     </form>
   )
 }

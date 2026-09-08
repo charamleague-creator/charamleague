@@ -22,25 +22,31 @@ export function countReceived(transfers: Transfer[], teamId: string, season: num
   return transfers.filter((t) => t.toTeamId === teamId && t.season === season).length
 }
 
+/**
+ * @param pendingSameTypeCount รายการ "ยืนยันแล้วแต่ยังไม่ปิด" ของ type เดียวกัน (เช่น auction
+ *   listing ที่ admin อนุมัติเข้าคิวแล้วแต่ยังไม่ปิดประมูล) — ต้องนับรวมเข้าโควตาด้วยตามเอกสารข้อ 5.2
+ */
 export function canSell(
   transfers: Transfer[],
   teamId: string,
   season: number,
   type: Transfer['type'],
+  pendingSameTypeCount = 0,
 ): { allowed: boolean; reason?: string } {
-  if (countSoldTotal(transfers, teamId, season) >= MAX_SOLD_TOTAL_PER_SEASON) {
+  const total = countSoldTotal(transfers, teamId, season) + pendingSameTypeCount
+  if (total >= MAX_SOLD_TOTAL_PER_SEASON) {
     return {
       allowed: false,
       reason: `ทีมนี้ขายผู้เล่นครบโควตา ${MAX_SOLD_TOTAL_PER_SEASON} คนของฤดูกาลนี้แล้ว`,
     }
   }
-  if (
-    type === 'auction' &&
-    countSoldViaAuction(transfers, teamId, season) >= MAX_SOLD_VIA_AUCTION_PER_SEASON
-  ) {
-    return {
-      allowed: false,
-      reason: `ทีมนี้ขายผ่านประมูลครบโควตา ${MAX_SOLD_VIA_AUCTION_PER_SEASON} ครั้งของฤดูกาลนี้แล้ว`,
+  if (type === 'auction') {
+    const viaAuction = countSoldViaAuction(transfers, teamId, season) + pendingSameTypeCount
+    if (viaAuction >= MAX_SOLD_VIA_AUCTION_PER_SEASON) {
+      return {
+        allowed: false,
+        reason: `ทีมนี้ขายผ่านประมูลครบโควตา ${MAX_SOLD_VIA_AUCTION_PER_SEASON} ครั้งของฤดูกาลนี้แล้ว`,
+      }
     }
   }
   return { allowed: true }

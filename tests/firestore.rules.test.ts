@@ -399,6 +399,169 @@ describe('leagues/{leagueId}/transfers/{transferId}', () => {
   })
 })
 
+describe('leagues/{leagueId}/auctionListings/{listingId}', () => {
+  const listingDoc = {
+    season: 1,
+    sellerTeamId: 't1',
+    sellerTeamName: 'Team 1',
+    playerId: 'p1',
+    playerName: 'Player 1',
+    playerPosition: 'MF',
+    playerAge: 20,
+    startingPrice: 100,
+    status: 'pending_approval',
+    highestBid: null,
+    highestBidderTeamId: null,
+    highestBidderTeamName: null,
+  }
+
+  async function seedTeams() {
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), 'leagues/superleague/teams/t1'), {
+        name: 'Team 1',
+        managerUid: 'manager-1',
+        managerName: 'Manager 1',
+        isForfeited: false,
+      })
+      await setDoc(doc(context.firestore(), 'leagues/superleague/teams/t2'), {
+        name: 'Team 2',
+        managerUid: 'manager-2',
+        managerName: 'Manager 2',
+        isForfeited: false,
+      })
+    })
+  }
+
+  it('ทีมผู้ขายสร้างรายการประมูลได้', async () => {
+    await seedTeams()
+    const seller = testEnv.authenticatedContext('manager-1', { role: 'manager' })
+    await assertSucceeds(
+      setDoc(doc(seller.firestore(), 'leagues/superleague/auctionListings/l1'), listingDoc),
+    )
+  })
+
+  it('ทีมอื่นสร้างแทนไม่ได้', async () => {
+    await seedTeams()
+    const outsider = testEnv.authenticatedContext('manager-2', { role: 'manager' })
+    await assertFails(
+      setDoc(doc(outsider.firestore(), 'leagues/superleague/auctionListings/l1'), listingDoc),
+    )
+  })
+
+  it('manager อนุมัติ/ปฏิเสธเองไม่ได้ (สิทธิ์ admin เท่านั้น)', async () => {
+    await seedTeams()
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), 'leagues/superleague/auctionListings/l1'), listingDoc)
+    })
+    const seller = testEnv.authenticatedContext('manager-1', { role: 'manager' })
+    await assertFails(
+      updateDoc(doc(seller.firestore(), 'leagues/superleague/auctionListings/l1'), {
+        status: 'open',
+      }),
+    )
+  })
+
+  async function seedOpenListing() {
+    await seedTeams()
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), 'leagues/superleague/auctionListings/l1'), {
+        ...listingDoc,
+        status: 'open',
+      })
+    })
+  }
+
+  it('ทีมอื่น (ไม่ใช่ผู้ขาย) ประมูลได้ ถ้าราคาสูงกว่าราคาเริ่ม', async () => {
+    await seedOpenListing()
+    const bidder = testEnv.authenticatedContext('manager-2', { role: 'manager' })
+    await assertSucceeds(
+      updateDoc(doc(bidder.firestore(), 'leagues/superleague/auctionListings/l1'), {
+        highestBid: 150,
+        highestBidderTeamId: 't2',
+        highestBidderTeamName: 'Team 2',
+      }),
+    )
+  })
+
+  it('ทีมผู้ขายประมูลนักเตะตัวเองไม่ได้', async () => {
+    await seedOpenListing()
+    const seller = testEnv.authenticatedContext('manager-1', { role: 'manager' })
+    await assertFails(
+      updateDoc(doc(seller.firestore(), 'leagues/superleague/auctionListings/l1'), {
+        highestBid: 150,
+        highestBidderTeamId: 't1',
+        highestBidderTeamName: 'Team 1',
+      }),
+    )
+  })
+
+  it('ประมูลราคาเท่าราคาเริ่มได้ (บิดแรกเปิดที่ราคาตั้งได้)', async () => {
+    await seedOpenListing()
+    const bidder = testEnv.authenticatedContext('manager-2', { role: 'manager' })
+    await assertSucceeds(
+      updateDoc(doc(bidder.firestore(), 'leagues/superleague/auctionListings/l1'), {
+        highestBid: 100,
+        highestBidderTeamId: 't2',
+        highestBidderTeamName: 'Team 2',
+      }),
+    )
+  })
+
+  it('ประมูลราคาต่ำกว่าราคาเริ่มไม่ได้', async () => {
+    await seedOpenListing()
+    const bidder = testEnv.authenticatedContext('manager-2', { role: 'manager' })
+    await assertFails(
+      updateDoc(doc(bidder.firestore(), 'leagues/superleague/auctionListings/l1'), {
+        highestBid: 99,
+        highestBidderTeamId: 't2',
+        highestBidderTeamName: 'Team 2',
+      }),
+    )
+  })
+
+  it('บิดครั้งถัดไปต้องสูงกว่าบิดปัจจุบันจริง (เท่ากันไม่ได้)', async () => {
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), 'leagues/superleague/auctionListings/l1'), {
+        ...listingDoc,
+        status: 'open',
+        highestBid: 150,
+        highestBidderTeamId: 't2',
+        highestBidderTeamName: 'Team 2',
+      })
+    })
+    await seedTeams()
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), 'leagues/superleague/teams/t3'), {
+        name: 'Team 3',
+        managerUid: 'manager-3',
+        managerName: 'Manager 3',
+        isForfeited: false,
+      })
+    })
+    const bidder = testEnv.authenticatedContext('manager-3', { role: 'manager' })
+    await assertFails(
+      updateDoc(doc(bidder.firestore(), 'leagues/superleague/auctionListings/l1'), {
+        highestBid: 150,
+        highestBidderTeamId: 't3',
+        highestBidderTeamName: 'Team 3',
+      }),
+    )
+  })
+
+  it('แก้ field อื่นพ่วงไปกับการประมูลไม่ได้', async () => {
+    await seedOpenListing()
+    const bidder = testEnv.authenticatedContext('manager-2', { role: 'manager' })
+    await assertFails(
+      updateDoc(doc(bidder.firestore(), 'leagues/superleague/auctionListings/l1'), {
+        highestBid: 150,
+        highestBidderTeamId: 't2',
+        highestBidderTeamName: 'Team 2',
+        startingPrice: 1,
+      }),
+    )
+  })
+})
+
 describe('leagues/{leagueId}/matches/{matchId} — สร้าง fixture', () => {
   it('admin สร้าง match ได้', async () => {
     const admin = testEnv.authenticatedContext('admin-1', { role: 'admin' })

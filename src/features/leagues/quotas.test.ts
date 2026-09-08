@@ -67,6 +67,21 @@ describe('canSell', () => {
     const result = canSell(transfers, 't1', 1, 'simple_sale')
     expect(result.allowed).toBe(true)
   })
+
+  it('รายการประมูลที่อนุมัติแล้วแต่ยังไม่ปิด ต้องนับเข้าโควตาด้วย', () => {
+    const transfers = Array.from({ length: 3 }, () =>
+      transfer({ fromTeamId: 't1', type: 'auction' }),
+    )
+    // มี auction ปิดแล้ว 3 + เปิดอยู่ 1 (pendingSameTypeCount) = 4 -> เต็มโควตาประมูลแล้ว
+    const result = canSell(transfers, 't1', 1, 'auction', 1)
+    expect(result.allowed).toBe(false)
+  })
+
+  it('รายการประมูลที่เปิดอยู่ยังไม่ปิด ก็นับเข้าโควตารวมด้วยเหมือนกัน', () => {
+    const transfers = Array.from({ length: 4 }, () => transfer({ fromTeamId: 't1' }))
+    const result = canSell(transfers, 't1', 1, 'simple_sale', 1)
+    expect(result.allowed).toBe(false)
+  })
 })
 
 describe('canReceive', () => {

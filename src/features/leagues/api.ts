@@ -9,6 +9,7 @@ import {
   getDocs,
   onSnapshot,
   query,
+  runTransaction,
   where,
   writeBatch,
 } from 'firebase/firestore'
@@ -16,6 +17,7 @@ import { db } from '@/lib/firebase'
 import { generateRoundRobin } from './fixtures'
 import { canReceive, canSell } from './quotas'
 import type {
+  AuctionListing,
   FreeAgent,
   League,
   LeagueStatus,
@@ -42,6 +44,9 @@ function playersCol(leagueId: string, teamId: string) {
 }
 function freeAgentsCol(leagueId: string) {
   return collection(db, 'leagues', leagueId, 'freeAgents')
+}
+function auctionListingsCol(leagueId: string) {
+  return collection(db, 'leagues', leagueId, 'auctionListings')
 }
 function saleOffersCol(leagueId: string) {
   return collection(db, 'leagues', leagueId, 'saleOffers')
@@ -335,6 +340,217 @@ export async function completeSale(leagueId: string, offerId: string): Promise<v
       }),
     (batch) =>
       batch.update(doc(db, 'leagues', leagueId, 'saleOffers', offerId), { status: 'completed' }),
+  ])
+}
+
+function toAuctionListing(snap: QueryDocumentSnapshot<DocumentData>): AuctionListing {
+  const data = snap.data()
+  return {
+    id: snap.id,
+    season: data.season,
+    sellerTeamId: data.sellerTeamId,
+    sellerTeamName: data.sellerTeamName,
+    playerId: data.playerId,
+    playerName: data.playerName,
+    playerPosition: data.playerPosition,
+    playerAge: data.playerAge,
+    startingPrice: data.startingPrice,
+    status: data.status,
+    highestBid: data.highestBid,
+    highestBidderTeamId: data.highestBidderTeamId,
+    highestBidderTeamName: data.highestBidderTeamName,
+  }
+}
+
+export function subscribeAuctionListings(
+  leagueId: string,
+  onChange: (listings: AuctionListing[]) => void,
+) {
+  return onSnapshot(auctionListingsCol(leagueId), (snap) =>
+    onChange(snap.docs.map(toAuctionListing)),
+  )
+}
+
+/** ทีมที่จะขายส่งเข้าคิวรอแอดมินอนุมัติ — ยังไม่นับเข้าโควตาจนกว่าจะอนุมัติ (ตามเอกสารข้อ 5.2) */
+export async function createAuctionListing(
+  leagueId: string,
+  input: {
+    sellerTeamId: string
+    sellerTeamName: string
+    playerId: string
+    playerName: string
+    playerPosition: Player['position']
+    playerAge: number
+    startingPrice: number
+  },
+): Promise<void> {
+  const leagueSnap = await getDoc(doc(db, 'leagues', leagueId))
+  if (!leagueSnap.exists()) throw new Error('ไม่พบลีก')
+  const league = toLeague(leagueSnap as QueryDocumentSnapshot<DocumentData>)
+  if (league.status !== 'in_season')
+    throw new Error('ส่งเข้าประมูลได้เฉพาะตอนลีกกำลังแข่งขันเท่านั้น')
+
+  await addDoc(auctionListingsCol(leagueId), {
+    ...input,
+    season: league.currentSeason,
+    status: 'pending_approval',
+    highestBid: null,
+    highestBidderTeamId: null,
+    highestBidderTeamName: null,
+  })
+}
+
+async function getOpenAuctionCountForTeam(leagueId: string, teamId: string, season: number) {
+  const snap = await getDocs(
+    query(
+      auctionListingsCol(leagueId),
+      where('season', '==', season),
+      where('sellerTeamId', '==', teamId),
+      where('status', '==', 'open'),
+    ),
+  )
+  return snap.size
+}
+
+/**
+ * แอดมินอนุมัติเข้าคิวประมูล — "ยืนยันแล้วแต่ยังไม่ปิด" ต้องนับเข้าโควตาทันที (เอกสารข้อ 5.2)
+ * เช็คก่อนอนุมัติเสมอ (guideline #5) เพราะพอ approve แล้วนับเข้าโควตาแล้ว จะย้อนไม่ได้ถ้าไม่ reject
+ */
+export async function approveAuctionListing(leagueId: string, listingId: string): Promise<void> {
+  const [leagueSnap, listingSnap] = await Promise.all([
+    getDoc(doc(db, 'leagues', leagueId)),
+    getDoc(doc(db, 'leagues', leagueId, 'auctionListings', listingId)),
+  ])
+  if (!leagueSnap.exists()) throw new Error('ไม่พบลีก')
+  if (!listingSnap.exists()) throw new Error('ไม่พบรายการประมูล')
+  const league = toLeague(leagueSnap as QueryDocumentSnapshot<DocumentData>)
+  const listing = toAuctionListing(listingSnap as QueryDocumentSnapshot<DocumentData>)
+  if (listing.status !== 'pending_approval') throw new Error('รายการนี้ไม่ได้รออนุมัติอยู่')
+
+  const [transfersSnap, openCount] = await Promise.all([
+    getDocs(query(transfersCol(leagueId), where('season', '==', league.currentSeason))),
+    getOpenAuctionCountForTeam(leagueId, listing.sellerTeamId, league.currentSeason),
+  ])
+  const transfers = transfersSnap.docs.map(toTransfer)
+  const sellCheck = canSell(transfers, listing.sellerTeamId, league.currentSeason, 'auction', openCount)
+  if (!sellCheck.allowed) throw new Error(sellCheck.reason)
+
+  await commitInChunks([
+    (batch) =>
+      batch.update(doc(db, 'leagues', leagueId, 'auctionListings', listingId), { status: 'open' }),
+  ])
+}
+
+export async function rejectAuctionListing(leagueId: string, listingId: string): Promise<void> {
+  await commitInChunks([
+    (batch) =>
+      batch.update(doc(db, 'leagues', leagueId, 'auctionListings', listingId), {
+        status: 'rejected',
+      }),
+  ])
+}
+
+/** ประมูล — ใช้ Firestore transaction กัน race condition ตอนมีคนประมูลพร้อมกัน (guideline #3) */
+export async function placeBid(
+  leagueId: string,
+  listingId: string,
+  teamId: string,
+  teamName: string,
+  amount: number,
+): Promise<void> {
+  const listingRef = doc(db, 'leagues', leagueId, 'auctionListings', listingId)
+  await runTransaction(db, async (tx) => {
+    const snap = await tx.get(listingRef)
+    if (!snap.exists()) throw new Error('ไม่พบรายการประมูล')
+    const listing = toAuctionListing(snap as QueryDocumentSnapshot<DocumentData>)
+    if (listing.status !== 'open') throw new Error('ประมูลนี้ไม่ได้เปิดอยู่')
+    if (teamId === listing.sellerTeamId) throw new Error('ทีมที่ขายห้ามประมูลนักเตะตัวเอง')
+    const minAcceptable = listing.highestBid === null ? listing.startingPrice : listing.highestBid + 1
+    if (amount < minAcceptable) {
+      throw new Error(`ราคาประมูลต้องอย่างน้อย ${minAcceptable}`)
+    }
+    tx.update(listingRef, {
+      highestBid: amount,
+      highestBidderTeamId: teamId,
+      highestBidderTeamName: teamName,
+    })
+  })
+}
+
+/**
+ * แอดมินปิดประมูล — กำหนดผู้ชนะจากราคาสูงสุด ย้ายผู้เล่นจริง + เช็คโควตาผู้ชนะก่อนบันทึก (guideline #5)
+ */
+export async function closeAuction(leagueId: string, listingId: string): Promise<void> {
+  const [leagueSnap, listingSnap] = await Promise.all([
+    getDoc(doc(db, 'leagues', leagueId)),
+    getDoc(doc(db, 'leagues', leagueId, 'auctionListings', listingId)),
+  ])
+  if (!leagueSnap.exists()) throw new Error('ไม่พบลีก')
+  if (!listingSnap.exists()) throw new Error('ไม่พบรายการประมูล')
+  const league = toLeague(leagueSnap as QueryDocumentSnapshot<DocumentData>)
+  const listing = toAuctionListing(listingSnap as QueryDocumentSnapshot<DocumentData>)
+  if (listing.status !== 'open') throw new Error('ประมูลนี้ไม่ได้เปิดอยู่')
+
+  if (listing.highestBidderTeamId === null) {
+    await commitInChunks([
+      (batch) =>
+        batch.update(doc(db, 'leagues', leagueId, 'auctionListings', listingId), {
+          status: 'closed_no_winner',
+        }),
+    ])
+    return
+  }
+
+  const transfersSnap = await getDocs(
+    query(transfersCol(leagueId), where('season', '==', league.currentSeason)),
+  )
+  const transfers = transfersSnap.docs.map(toTransfer)
+  const receiveCheck = canReceive(transfers, listing.highestBidderTeamId, league.currentSeason)
+  if (!receiveCheck.allowed) throw new Error(receiveCheck.reason)
+
+  const playerSnap = await getDoc(
+    doc(db, 'leagues', leagueId, 'teams', listing.sellerTeamId, 'players', listing.playerId),
+  )
+  if (!playerSnap.exists()) throw new Error('ไม่พบผู้เล่นในทีมต้นทาง (อาจถูกย้ายไปแล้ว)')
+  const player = toPlayer(playerSnap as QueryDocumentSnapshot<DocumentData>)
+
+  await commitInChunks([
+    (batch) =>
+      batch.delete(
+        doc(db, 'leagues', leagueId, 'teams', listing.sellerTeamId, 'players', listing.playerId),
+      ),
+    (batch) =>
+      batch.set(
+        doc(
+          db,
+          'leagues',
+          leagueId,
+          'teams',
+          listing.highestBidderTeamId as string,
+          'players',
+          listing.playerId,
+        ),
+        {
+          name: player.name,
+          position: player.position,
+          age: player.age,
+          joinedSeason: player.joinedSeason,
+        },
+      ),
+    (batch) =>
+      batch.set(doc(transfersCol(leagueId)), {
+        season: league.currentSeason,
+        type: 'auction',
+        fromTeamId: listing.sellerTeamId,
+        toTeamId: listing.highestBidderTeamId,
+        playerId: listing.playerId,
+        playerName: player.name,
+        price: listing.highestBid,
+      }),
+    (batch) =>
+      batch.update(doc(db, 'leagues', leagueId, 'auctionListings', listingId), {
+        status: 'closed',
+      }),
   ])
 }
 

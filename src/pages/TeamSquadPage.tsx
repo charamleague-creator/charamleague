@@ -2,6 +2,7 @@ import { type FormEvent, useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import {
   addPlayer,
+  createAuctionListing,
   createSaleOffer,
   releasePlayer,
   removePlayer,
@@ -102,6 +103,24 @@ export default function TeamSquadPage() {
     }
   }
 
+  async function handleListForAuction(player: Player, startingPrice: number) {
+    setError(null)
+    if (!team) return
+    try {
+      await createAuctionListing(currentLeagueId, {
+        sellerTeamId: currentTeamId,
+        sellerTeamName: team.name,
+        playerId: player.id,
+        playerName: player.name,
+        playerPosition: player.position,
+        playerAge: player.age,
+        startingPrice,
+      })
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
   return (
     <main style={{ maxWidth: 640, margin: '2rem auto' }}>
       <h1>{team?.name ?? 'ทีม'} — รายชื่อผู้เล่น</h1>
@@ -125,6 +144,11 @@ export default function TeamSquadPage() {
               <ProposeSaleForm
                 teams={otherTeams}
                 onSubmit={(toTeamId, price) => handleProposeSale(player, toTeamId, price)}
+              />
+            )}
+            {canRelease && (
+              <ListForAuctionForm
+                onSubmit={(startingPrice) => handleListForAuction(player, startingPrice)}
               />
             )}
           </li>
@@ -170,6 +194,31 @@ function ProposeSaleForm({
         style={{ width: '5em' }}
       />
       <button type="submit">เสนอขาย</button>
+    </form>
+  )
+}
+
+function ListForAuctionForm({ onSubmit }: { onSubmit: (startingPrice: number) => void }) {
+  const [startingPrice, setStartingPrice] = useState('')
+
+  function handleSubmit(e: FormEvent) {
+    e.preventDefault()
+    onSubmit(Number(startingPrice))
+    setStartingPrice('')
+  }
+
+  return (
+    <form onSubmit={handleSubmit} style={{ display: 'inline' }}>
+      <input
+        type="number"
+        min={0}
+        placeholder="ราคาเริ่มประมูล"
+        value={startingPrice}
+        onChange={(e) => setStartingPrice(e.target.value)}
+        required
+        style={{ width: '7em' }}
+      />
+      <button type="submit">ส่งเข้าประมูล</button>
     </form>
   )
 }
