@@ -40,6 +40,17 @@ export interface Player {
   joinedSeason: number
 }
 
+export interface FreeAgent {
+  id: string
+  name: string
+  position: PlayerPosition
+  age: number
+  joinedSeason: number
+  releasedFromTeamId: string
+  releasedFromTeamName: string
+  releasedSeason: number
+}
+
 export interface StandingsRow {
   teamId: string
   teamName: string

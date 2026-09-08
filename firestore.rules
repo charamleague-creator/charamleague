@@ -16,6 +16,12 @@ function isAdmin() {
   return hasRole('admin');
 }
 
+function managesTeam(database, leagueId, teamId) {
+  return isSignedIn() &&
+    get(/databases/$(database)/documents/leagues/$(leagueId)/teams/$(teamId)).data.managerUid
+      == request.auth.uid;
+}
+
 service cloud.firestore {
   match /databases/{database}/documents {
 
@@ -30,11 +36,31 @@ service cloud.firestore {
         allow read: if true;
         allow write: if isAdmin();
 
-        // Phase 2.1: squad foundation — ยังไม่มี market operation ให้ manager เขียนเอง
+        // Phase 2.1: squad foundation. Phase 2.2: manager ตัวเองฉีกสัญญา (ลบ) ผู้เล่นออกจากทีมได้เอง
+        // เพิ่ม/แก้ข้อมูลผู้เล่นยังเป็นสิทธิ์ admin เท่านั้น (ยังไม่มีระบบซื้อเข้าเองในทีม)
         match /players/{playerId} {
           allow read: if true;
-          allow write: if isAdmin();
+          allow create, update: if isAdmin();
+          allow delete: if isAdmin() || managesTeam(database, leagueId, teamId);
         }
+      }
+
+      // Phase 2.2: ผู้เล่นอิสระหลังฉีกสัญญา — สร้างได้เฉพาะทีมที่ปล่อยผู้เล่นออกจริง (เช็คว่า
+      // ผู้เขียนคุมทีมที่ตรงกับ releasedFromTeamId ใน field ที่กำลังเขียน) ห้ามแก้/ลบตรงๆ
+      // (การ "รับเข้าทีม" ใน sub-phase ถัดไปจะทำผ่านฟังก์ชันเฉพาะ ไม่ใช่แก้ doc นี้ตรงๆ)
+      match /freeAgents/{playerId} {
+        allow read: if true;
+        allow create: if isAdmin() ||
+          managesTeam(database, leagueId, request.resource.data.releasedFromTeamId);
+        allow update, delete: if isAdmin();
+      }
+
+      // Phase 2.2: log การฉีกสัญญา ใช้กัน ping-pong (guideline #4/#6) — เขียนได้ครั้งเดียว ห้ามแก้/ลบ
+      match /releaseLog/{logId} {
+        allow read: if true;
+        allow create: if isAdmin() ||
+          managesTeam(database, leagueId, request.resource.data.fromTeamId);
+        allow update, delete: if false;
       }
 
       match /matches/{matchId} {

@@ -2,6 +2,7 @@ import { type FormEvent, useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import {
   addPlayer,
+  releasePlayer,
   removePlayer,
   subscribeLeague,
   subscribePlayers,
@@ -14,7 +15,7 @@ const POSITIONS: PlayerPosition[] = ['GK', 'DF', 'MF', 'FW']
 
 export default function TeamSquadPage() {
   const { leagueId, teamId } = useParams<{ leagueId: string; teamId: string }>()
-  const { role } = useAuth()
+  const { role, user } = useAuth()
   const [league, setLeague] = useState<League | null>(null)
   const [teams, setTeams] = useState<Team[]>([])
   const [players, setPlayers] = useState<Player[]>([])
@@ -61,6 +62,18 @@ export default function TeamSquadPage() {
     }
   }
 
+  async function handleRelease(playerId: string) {
+    setError(null)
+    try {
+      await releasePlayer(currentLeagueId, currentTeamId, playerId)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  const isOwnManager = !!user && !!team && user.uid === team.managerUid
+  const canRelease = role === 'admin' || isOwnManager
+
   return (
     <main style={{ maxWidth: 640, margin: '2rem auto' }}>
       <h1>{team?.name ?? 'ทีม'} — รายชื่อผู้เล่น</h1>
@@ -70,9 +83,14 @@ export default function TeamSquadPage() {
         {players.map((player) => (
           <li key={player.id}>
             {player.name} ({player.position}, อายุ {player.age})
+            {canRelease && (
+              <button type="button" onClick={() => handleRelease(player.id)}>
+                ฉีกสัญญา
+              </button>
+            )}
             {role === 'admin' && (
               <button type="button" onClick={() => handleRemove(player.id)}>
-                ลบ
+                ลบ (แก้ข้อมูลผิด)
               </button>
             )}
           </li>

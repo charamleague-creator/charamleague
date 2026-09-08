@@ -6,12 +6,13 @@ import {
   reportMatchResult,
   setTeamForfeited,
   startNewSeason,
+  subscribeFreeAgents,
   subscribeLeague,
   subscribeSeasonMatches,
   subscribeTeams,
 } from '@/features/leagues/api'
 import { computeStandings } from '@/features/leagues/standings'
-import type { League, Match, Team } from '@/features/leagues/types'
+import type { FreeAgent, League, Match, Team } from '@/features/leagues/types'
 import { useAuth } from '@/hooks/useAuth'
 
 export default function LeagueDetailPage() {
@@ -20,6 +21,7 @@ export default function LeagueDetailPage() {
   const [league, setLeague] = useState<League | null>(null)
   const [teams, setTeams] = useState<Team[]>([])
   const [matches, setMatches] = useState<Match[]>([])
+  const [freeAgents, setFreeAgents] = useState<FreeAgent[]>([])
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
@@ -36,6 +38,11 @@ export default function LeagueDetailPage() {
     if (!leagueId || !league) return
     return subscribeSeasonMatches(leagueId, league.currentSeason, setMatches)
   }, [leagueId, league?.currentSeason])
+
+  useEffect(() => {
+    if (!leagueId) return
+    return subscribeFreeAgents(leagueId, setFreeAgents)
+  }, [leagueId])
 
   if (!leagueId || !league) return <main style={{ margin: '2rem' }}>กำลังโหลด...</main>
 
@@ -124,6 +131,17 @@ export default function LeagueDetailPage() {
               role !== 'admin' &&
               !(user && match.involvedManagerUids.includes(user.uid)) &&
               'ยังไม่แข่ง'}
+          </li>
+        ))}
+      </ul>
+
+      <h2>ผู้เล่นอิสระ (ฉีกสัญญาแล้ว รอทีมใหม่รับเข้า)</h2>
+      <ul>
+        {freeAgents.length === 0 && <li>ไม่มีผู้เล่นอิสระ</li>}
+        {freeAgents.map((agent) => (
+          <li key={agent.id}>
+            {agent.name} ({agent.position}, อายุ {agent.age}) — ปล่อยจาก {agent.releasedFromTeamName}{' '}
+            (ฤดูกาล {agent.releasedSeason})
           </li>
         ))}
       </ul>

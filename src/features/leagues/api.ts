@@ -14,7 +14,7 @@ import {
 } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
 import { generateRoundRobin } from './fixtures'
-import type { League, LeagueStatus, Match, Player, Team } from './types'
+import type { FreeAgent, League, LeagueStatus, Match, Player, Team } from './types'
 
 const BATCH_CHUNK_SIZE = 450
 
@@ -29,6 +29,9 @@ function matchesCol(leagueId: string) {
 }
 function playersCol(leagueId: string, teamId: string) {
   return collection(db, 'leagues', leagueId, 'teams', teamId, 'players')
+}
+function freeAgentsCol(leagueId: string) {
+  return collection(db, 'leagues', leagueId, 'freeAgents')
 }
 
 function toLeague(snap: QueryDocumentSnapshot<DocumentData>): League {
@@ -99,6 +102,74 @@ export async function removePlayer(
   playerId: string,
 ): Promise<void> {
   await deleteDoc(doc(db, 'leagues', leagueId, 'teams', teamId, 'players', playerId))
+}
+
+function toFreeAgent(snap: QueryDocumentSnapshot<DocumentData>): FreeAgent {
+  const data = snap.data()
+  return {
+    id: snap.id,
+    name: data.name,
+    position: data.position,
+    age: data.age,
+    joinedSeason: data.joinedSeason,
+    releasedFromTeamId: data.releasedFromTeamId,
+    releasedFromTeamName: data.releasedFromTeamName,
+    releasedSeason: data.releasedSeason,
+  }
+}
+
+export function subscribeFreeAgents(leagueId: string, onChange: (agents: FreeAgent[]) => void) {
+  return onSnapshot(freeAgentsCol(leagueId), (snap) => onChange(snap.docs.map(toFreeAgent)))
+}
+
+/**
+ * ฉีกสัญญา — ปล่อยผู้เล่นออกจากทีมไปเป็นผู้เล่นอิสระ (free agent)
+ * คง playerId เดิมตลอดการย้าย เพื่อให้ตรวจ ping-pong (guideline #4/#6) และรักษา identity ได้
+ */
+export async function releasePlayer(leagueId: string, teamId: string, playerId: string) {
+  const leagueSnap = await getDoc(doc(db, 'leagues', leagueId))
+  if (!leagueSnap.exists()) throw new Error('ไม่พบลีก')
+  const league = toLeague(leagueSnap as QueryDocumentSnapshot<DocumentData>)
+  if (league.status !== 'in_season')
+    throw new Error('ฉีกสัญญาได้เฉพาะตอนลีกกำลังแข่งขันเท่านั้น')
+
+  const [teamSnap, playerSnap] = await Promise.all([
+    getDoc(doc(db, 'leagues', leagueId, 'teams', teamId)),
+    getDoc(doc(db, 'leagues', leagueId, 'teams', teamId, 'players', playerId)),
+  ])
+  if (!teamSnap.exists()) throw new Error('ไม่พบทีม')
+  if (!playerSnap.exists()) throw new Error('ไม่พบผู้เล่น')
+  const team = toTeam(teamSnap as QueryDocumentSnapshot<DocumentData>)
+  const player = toPlayer(playerSnap as QueryDocumentSnapshot<DocumentData>)
+
+  const releaseLogId = `${league.currentSeason}_${teamId}_${playerId}`
+  const existingRelease = await getDoc(doc(db, 'leagues', leagueId, 'releaseLog', releaseLogId))
+  if (existingRelease.exists()) {
+    throw new Error(
+      `ห้ามฉีกสัญญา "${player.name}" ซ้ำจากทีมเดียวกันในฤดูกาลนี้ (ป้องกัน ping-pong)`,
+    )
+  }
+
+  await commitInChunks([
+    (batch) => batch.delete(doc(db, 'leagues', leagueId, 'teams', teamId, 'players', playerId)),
+    (batch) =>
+      batch.set(doc(db, 'leagues', leagueId, 'freeAgents', playerId), {
+        name: player.name,
+        position: player.position,
+        age: player.age,
+        joinedSeason: player.joinedSeason,
+        releasedFromTeamId: teamId,
+        releasedFromTeamName: team.name,
+        releasedSeason: league.currentSeason,
+      }),
+    (batch) =>
+      batch.set(doc(db, 'leagues', leagueId, 'releaseLog', releaseLogId), {
+        playerId,
+        playerName: player.name,
+        fromTeamId: teamId,
+        season: league.currentSeason,
+      }),
+  ])
 }
 
 export function subscribeLeagues(onChange: (leagues: League[]) => void) {
