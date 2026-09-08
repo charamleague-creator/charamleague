@@ -28,6 +28,8 @@ import type {
   SaleOffer,
   Team,
 } from '@/features/leagues/types'
+import { createCup, subscribeCups } from '@/features/cups/api'
+import type { Cup, CupType } from '@/features/cups/types'
 import { useAuth } from '@/hooks/useAuth'
 
 export default function LeagueDetailPage() {
@@ -39,6 +41,7 @@ export default function LeagueDetailPage() {
   const [freeAgents, setFreeAgents] = useState<FreeAgent[]>([])
   const [saleOffers, setSaleOffers] = useState<SaleOffer[]>([])
   const [auctionListings, setAuctionListings] = useState<AuctionListing[]>([])
+  const [cups, setCups] = useState<Cup[]>([])
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
@@ -68,6 +71,11 @@ export default function LeagueDetailPage() {
 
   useEffect(() => {
     if (!leagueId) return
+    return subscribeCups(leagueId, setCups)
+  }, [leagueId])
+
+  useEffect(() => {
+    if (!leagueId) return
     return subscribeAuctionListings(leagueId, setAuctionListings)
   }, [leagueId])
 
@@ -77,7 +85,7 @@ export default function LeagueDetailPage() {
   const standings = computeStandings(matches, teams)
   const myTeam = teams.find((t) => !!user && t.managerUid === user.uid)
 
-  async function run(action: () => Promise<void>) {
+  async function run(action: () => Promise<unknown>) {
     setError(null)
     try {
       await action()
@@ -264,6 +272,27 @@ export default function LeagueDetailPage() {
         })}
       </ul>
 
+      <h2>ถ้วย</h2>
+      <ul>
+        {cups.length === 0 && <li>ไม่มีถ้วย</li>}
+        {cups.map((cup) => (
+          <li key={cup.id}>
+            <Link to={`/leagues/${leagueId}/cups/${cup.id}`}>
+              {cup.name} ({cup.type === 'major' ? 'ถ้วยใหญ่' : 'ถ้วยเล็ก'})
+            </Link>{' '}
+            — สถานะ: {cup.status === 'completed' ? 'จบแล้ว' : 'กำลังแข่ง'}
+          </li>
+        ))}
+      </ul>
+      {role === 'admin' && (
+        <CreateCupForm
+          teams={teams}
+          onSubmit={(input) =>
+            run(() => createCup(leagueId, { ...input, season: league.currentSeason }))
+          }
+        />
+      )}
+
       {role === 'admin' && (
         <section>
           <h2>จัดการทีม</h2>
@@ -320,6 +349,59 @@ function ScoreForm({ onSubmit }: { onSubmit: (homeScore: number, awayScore: numb
         style={{ width: '3em' }}
       />
       <button type="submit">บันทึกผล</button>
+    </form>
+  )
+}
+
+function CreateCupForm({
+  teams,
+  onSubmit,
+}: {
+  teams: Team[]
+  onSubmit: (input: { name: string; type: CupType; teamIds: string[] }) => void
+}) {
+  const [name, setName] = useState('')
+  const [type, setType] = useState<CupType>('major')
+  const [selected, setSelected] = useState<string[]>([])
+
+  function toggle(teamId: string) {
+    setSelected((prev) =>
+      prev.includes(teamId) ? prev.filter((id) => id !== teamId) : [...prev, teamId],
+    )
+  }
+
+  function handleSubmit(e: FormEvent) {
+    e.preventDefault()
+    onSubmit({ name, type, teamIds: selected })
+    setName('')
+    setSelected([])
+  }
+
+  return (
+    <form onSubmit={handleSubmit}>
+      <input
+        placeholder="ชื่อถ้วย"
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        required
+      />
+      <select value={type} onChange={(e) => setType(e.target.value as CupType)}>
+        <option value="major">ถ้วยใหญ่</option>
+        <option value="minor">ถ้วยเล็ก</option>
+      </select>
+      {teams.map((t) => (
+        <label key={t.id}>
+          <input
+            type="checkbox"
+            checked={selected.includes(t.id)}
+            onChange={() => toggle(t.id)}
+          />
+          {t.name}
+        </label>
+      ))}
+      <button type="submit" disabled={selected.length < 2}>
+        สร้างถ้วย
+      </button>
     </form>
   )
 }

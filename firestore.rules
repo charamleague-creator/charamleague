@@ -124,6 +124,19 @@ service cloud.firestore {
             .hasOnly(['status', 'homeScore', 'awayScore'])
         );
       }
+
+      // Phase 3: บอลถ้วย — สร้าง bracket + รายงาน/แก้ผลเป็นสิทธิ์ admin ทั้งหมดเสมอ (ต่างจากนัดลีก)
+      // เพราะการรายงานผล 1 นัดต้อง propagate ผู้ชนะ + cascade ล้างหลาย document ข้ามคู่ทีมอื่นที่
+      // ไม่เกี่ยวกับผู้รายงานเลย (เช่นรอบชิง) ตรวจสิทธิ์ manager ข้ามคู่แบบนี้ปลอดภัยไม่ได้เหมือนตลาดซื้อขาย
+      match /cups/{cupId} {
+        allow read: if true;
+        allow write: if isAdmin();
+
+        match /matches/{cupMatchId} {
+          allow read: if true;
+          allow write: if isAdmin();
+        }
+      }
     }
 
     // deny-by-default: path ที่ไม่ได้ match ข้างบนจะถูกปฏิเสธเสมอ

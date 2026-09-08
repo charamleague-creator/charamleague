@@ -678,6 +678,71 @@ describe('leagues/{leagueId}/matches/{matchId} — รายงานผล', ()
   })
 })
 
+describe('leagues/{leagueId}/cups/{cupId}', () => {
+  it('อ่านได้แม้ไม่ login', async () => {
+    const unauth = testEnv.unauthenticatedContext()
+    await assertSucceeds(getDoc(doc(unauth.firestore(), 'leagues/superleague/cups/c1')))
+  })
+
+  it('manager สร้าง/แก้ถ้วยเองไม่ได้', async () => {
+    const manager = testEnv.authenticatedContext('manager-1', { role: 'manager' })
+    await assertFails(
+      setDoc(doc(manager.firestore(), 'leagues/superleague/cups/c1'), {
+        name: 'ถ้วยใหญ่',
+        type: 'major',
+        season: 1,
+        status: 'in_progress',
+      }),
+    )
+  })
+
+  it('admin สร้างได้', async () => {
+    const admin = testEnv.authenticatedContext('admin-1', { role: 'admin' })
+    await assertSucceeds(
+      setDoc(doc(admin.firestore(), 'leagues/superleague/cups/c1'), {
+        name: 'ถ้วยใหญ่',
+        type: 'major',
+        season: 1,
+        status: 'in_progress',
+      }),
+    )
+  })
+})
+
+describe('leagues/{leagueId}/cups/{cupId}/matches/{matchId}', () => {
+  const cupMatchDoc = {
+    round: 1,
+    slot: 0,
+    homeTeamId: 't1',
+    awayTeamId: 't2',
+    status: 'scheduled',
+    homeScore: null,
+    awayScore: null,
+    winnerTeamId: null,
+  }
+
+  it('อ่านได้แม้ไม่ login', async () => {
+    const unauth = testEnv.unauthenticatedContext()
+    await assertSucceeds(
+      getDoc(doc(unauth.firestore(), 'leagues/superleague/cups/c1/matches/r1_s0')),
+    )
+  })
+
+  it('manager (แม้เป็นทีมที่แข่งอยู่) รายงานผลเองไม่ได้ — ต่างจากนัดลีก', async () => {
+    const manager = testEnv.authenticatedContext('manager-1', { role: 'manager' })
+    await assertFails(
+      setDoc(doc(manager.firestore(), 'leagues/superleague/cups/c1/matches/r1_s0'), cupMatchDoc),
+    )
+  })
+
+  it('admin เขียนได้', async () => {
+    const admin = testEnv.authenticatedContext('admin-1', { role: 'admin' })
+    await assertSucceeds(
+      setDoc(doc(admin.firestore(), 'leagues/superleague/cups/c1/matches/r1_s0'), cupMatchDoc),
+    )
+  })
+})
+
 describe('deny-by-default', () => {
   it('collection ที่ไม่ได้กำหนด rule ไว้ ต้องถูกปฏิเสธเสมอ', async () => {
     const admin = testEnv.authenticatedContext('admin-1', { role: 'admin' })

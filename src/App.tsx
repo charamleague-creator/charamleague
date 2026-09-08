@@ -9,6 +9,7 @@ const NotFoundPage = lazy(() => import('@/pages/NotFoundPage'))
 const LeaguesListPage = lazy(() => import('@/pages/LeaguesListPage'))
 const LeagueDetailPage = lazy(() => import('@/pages/LeagueDetailPage'))
 const TeamSquadPage = lazy(() => import('@/pages/TeamSquadPage'))
+const CupDetailPage = lazy(() => import('@/pages/CupDetailPage'))
 
 export default function App() {
   return (
@@ -46,6 +47,14 @@ export default function App() {
               element={
                 <ProtectedRoute>
                   <TeamSquadPage />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/leagues/:leagueId/cups/:cupId"
+              element={
+                <ProtectedRoute>
+                  <CupDetailPage />
                 </ProtectedRoute>
               }
             />
