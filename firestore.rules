@@ -19,19 +19,29 @@ function isAdmin() {
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // ตัวอย่างโครง schema สำหรับ Phase 1 (League core) — ยืนยัน pattern สิทธิ์ผ่าน emulator test
-    // ก่อน implement schema จริงของแต่ละฟีเจอร์
+    // Phase 1: League core — teams/fixtures ทั้งชุดสร้าง/แก้ metadata ได้เฉพาะ admin
+    // manager ที่เกี่ยวข้องกับนัดทำได้แค่รายงานสกอร์ (เปลี่ยน scheduled -> played,
+    // แก้ได้แค่ field status/homeScore/awayScore) เช็คทั้ง "ใคร" และ "อะไร" ตามข้อ 7
     match /leagues/{leagueId} {
       allow read: if true;
       allow create, update, delete: if isAdmin();
 
+      match /teams/{teamId} {
+        allow read: if true;
+        allow write: if isAdmin();
+      }
+
       match /matches/{matchId} {
         allow read: if true;
-        allow create: if isAdmin() ||
-          (isSignedIn() && request.auth.uid in request.resource.data.involvedManagerUids);
-        allow update: if isAdmin() ||
-          (isSignedIn() && request.auth.uid in resource.data.involvedManagerUids);
-        allow delete: if isAdmin();
+        allow create, delete: if isAdmin();
+        allow update: if isAdmin() || (
+          isSignedIn() &&
+          request.auth.uid in resource.data.involvedManagerUids &&
+          resource.data.status == 'scheduled' &&
+          request.resource.data.status == 'played' &&
+          request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['status', 'homeScore', 'awayScore'])
+        );
       }
     }
 

@@ -6,6 +6,8 @@ import { AuthProvider } from '@/features/auth/AuthContext'
 const LoginPage = lazy(() => import('@/pages/LoginPage'))
 const DashboardPage = lazy(() => import('@/pages/DashboardPage'))
 const NotFoundPage = lazy(() => import('@/pages/NotFoundPage'))
+const LeaguesListPage = lazy(() => import('@/pages/LeaguesListPage'))
+const LeagueDetailPage = lazy(() => import('@/pages/LeagueDetailPage'))
 
 export default function App() {
   return (
@@ -19,6 +21,22 @@ export default function App() {
               element={
                 <ProtectedRoute>
                   <DashboardPage />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/leagues"
+              element={
+                <ProtectedRoute>
+                  <LeaguesListPage />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/leagues/:leagueId"
+              element={
+                <ProtectedRoute>
+                  <LeagueDetailPage />
                 </ProtectedRoute>
               }
             />
