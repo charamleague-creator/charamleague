@@ -6,7 +6,7 @@ function transfer(overrides: Partial<Transfer>): Transfer {
   return {
     id: 'x',
     season: 1,
-    type: 'simple_sale',
+    type: 'auction',
     fromTeamId: 't1',
     toTeamId: 't2',
     playerId: 'p1',
@@ -26,12 +26,9 @@ describe('quota counting', () => {
     expect(countSoldTotal(transfers, 't1', 2)).toBe(1)
   })
 
-  it('นับขายผ่านประมูลแยกจากขายย่อย', () => {
-    const transfers = [
-      transfer({ type: 'auction', fromTeamId: 't1' }),
-      transfer({ type: 'simple_sale', fromTeamId: 't1' }),
-    ]
-    expect(countSoldViaAuction(transfers, 't1', 1)).toBe(1)
+  it('นับขายผ่านประมูล', () => {
+    const transfers = [transfer({ fromTeamId: 't1' }), transfer({ fromTeamId: 't1' })]
+    expect(countSoldViaAuction(transfers, 't1', 1)).toBe(2)
     expect(countSoldTotal(transfers, 't1', 1)).toBe(2)
   })
 
@@ -43,12 +40,12 @@ describe('quota counting', () => {
 
 describe('canSell', () => {
   it('ขายได้ถ้ายังไม่เกินโควตารวม', () => {
-    expect(canSell([], 't1', 1, 'simple_sale').allowed).toBe(true)
+    expect(canSell([], 't1', 1, 'auction').allowed).toBe(true)
   })
 
   it('ขายไม่ได้ถ้าขายรวมครบ 5 ครั้งแล้ว', () => {
     const transfers = Array.from({ length: 5 }, () => transfer({ fromTeamId: 't1' }))
-    const result = canSell(transfers, 't1', 1, 'simple_sale')
+    const result = canSell(transfers, 't1', 1, 'auction')
     expect(result.allowed).toBe(false)
   })
 
@@ -58,14 +55,6 @@ describe('canSell', () => {
     )
     const result = canSell(transfers, 't1', 1, 'auction')
     expect(result.allowed).toBe(false)
-  })
-
-  it('ขายย่อยได้แม้ขายผ่านประมูลครบ 4 แล้ว ถ้ายังไม่ครบโควตารวม 5', () => {
-    const transfers = Array.from({ length: 4 }, () =>
-      transfer({ fromTeamId: 't1', type: 'auction' }),
-    )
-    const result = canSell(transfers, 't1', 1, 'simple_sale')
-    expect(result.allowed).toBe(true)
   })
 
   it('รายการประมูลที่อนุมัติแล้วแต่ยังไม่ปิด ต้องนับเข้าโควตาด้วย', () => {
@@ -79,7 +68,7 @@ describe('canSell', () => {
 
   it('รายการประมูลที่เปิดอยู่ยังไม่ปิด ก็นับเข้าโควตารวมด้วยเหมือนกัน', () => {
     const transfers = Array.from({ length: 4 }, () => transfer({ fromTeamId: 't1' }))
-    const result = canSell(transfers, 't1', 1, 'simple_sale', 1)
+    const result = canSell(transfers, 't1', 1, 'auction', 1)
     expect(result.allowed).toBe(false)
   })
 })

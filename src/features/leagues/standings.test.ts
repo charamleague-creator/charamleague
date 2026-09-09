@@ -3,9 +3,9 @@ import { computeStandings } from './standings'
 import type { Match, Team } from './types'
 
 const teams: Team[] = [
-  { id: 't1', name: 'Alpha', managerUid: 'u1', managerName: 'A', isForfeited: false },
-  { id: 't2', name: 'Bravo', managerUid: 'u2', managerName: 'B', isForfeited: false },
-  { id: 't3', name: 'Charlie', managerUid: 'u3', managerName: 'C', isForfeited: true },
+  { id: 't1', name: 'Alpha', managerUid: 'u1', managerName: 'A', isForfeited: false, balance: 0 },
+  { id: 't2', name: 'Bravo', managerUid: 'u2', managerName: 'B', isForfeited: false, balance: 0 },
+  { id: 't3', name: 'Charlie', managerUid: 'u3', managerName: 'C', isForfeited: true, balance: 0 },
 ]
 
 function match(overrides: Partial<Match>): Match {

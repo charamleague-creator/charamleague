@@ -63,7 +63,7 @@ describe('leagues/{leagueId}/teams/{teamId}', () => {
     await assertSucceeds(getDoc(doc(unauth.firestore(), 'leagues/superleague/teams/t1')))
   })
 
-  it('manager เขียนไม่ได้', async () => {
+  it('manager สร้างทีมเองไม่ได้', async () => {
     const manager = testEnv.authenticatedContext('manager-1', { role: 'manager' })
     await assertFails(
       setDoc(doc(manager.firestore(), 'leagues/superleague/teams/t1'), {
@@ -71,11 +71,12 @@ describe('leagues/{leagueId}/teams/{teamId}', () => {
         managerUid: 'manager-1',
         managerName: 'Manager 1',
         isForfeited: false,
+        balance: 100,
       }),
     )
   })
 
-  it('admin เขียนได้', async () => {
+  it('admin สร้างได้', async () => {
     const admin = testEnv.authenticatedContext('admin-1', { role: 'admin' })
     await assertSucceeds(
       setDoc(doc(admin.firestore(), 'leagues/superleague/teams/t1'), {
@@ -83,7 +84,70 @@ describe('leagues/{leagueId}/teams/{teamId}', () => {
         managerUid: 'manager-1',
         managerName: 'Manager 1',
         isForfeited: false,
+        balance: 100,
       }),
+    )
+  })
+
+  async function seedTeams() {
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), 'leagues/superleague/teams/t1'), {
+        name: 'Team 1',
+        managerUid: 'manager-1',
+        managerName: 'Manager 1',
+        isForfeited: false,
+        balance: 10,
+      })
+      await setDoc(doc(context.firestore(), 'leagues/superleague/teams/t2'), {
+        name: 'Team 2',
+        managerUid: 'manager-2',
+        managerName: 'Manager 2',
+        isForfeited: false,
+        balance: 10,
+      })
+    })
+  }
+
+  it('manager เจ้าของทีมเพิ่ม balance ตัวเองได้ (ย่อยนักเตะ)', async () => {
+    await seedTeams()
+    const manager = testEnv.authenticatedContext('manager-1', { role: 'manager' })
+    await assertSucceeds(
+      updateDoc(doc(manager.firestore(), 'leagues/superleague/teams/t1'), { balance: 12 }),
+    )
+  })
+
+  it('manager เจ้าของทีมลด balance ตัวเองไม่ได้', async () => {
+    await seedTeams()
+    const manager = testEnv.authenticatedContext('manager-1', { role: 'manager' })
+    await assertFails(
+      updateDoc(doc(manager.firestore(), 'leagues/superleague/teams/t1'), { balance: 8 }),
+    )
+  })
+
+  it('manager แก้ field อื่นพ่วงไปกับ balance ไม่ได้', async () => {
+    await seedTeams()
+    const manager = testEnv.authenticatedContext('manager-1', { role: 'manager' })
+    await assertFails(
+      updateDoc(doc(manager.firestore(), 'leagues/superleague/teams/t1'), {
+        balance: 12,
+        name: 'Hacked',
+      }),
+    )
+  })
+
+  it('manager ทีมอื่นเพิ่ม balance ของทีมนี้ไม่ได้', async () => {
+    await seedTeams()
+    const outsider = testEnv.authenticatedContext('manager-2', { role: 'manager' })
+    await assertFails(
+      updateDoc(doc(outsider.firestore(), 'leagues/superleague/teams/t1'), { balance: 12 }),
+    )
+  })
+
+  it('admin ลด/แก้ balance ได้ตามปกติ', async () => {
+    await seedTeams()
+    const admin = testEnv.authenticatedContext('admin-1', { role: 'admin' })
+    await assertSucceeds(
+      updateDoc(doc(admin.firestore(), 'leagues/superleague/teams/t1'), { balance: 0 }),
     )
   })
 })
@@ -154,123 +218,13 @@ describe('leagues/{leagueId}/teams/{teamId}/players/{playerId}', () => {
   })
 })
 
-describe('leagues/{leagueId}/freeAgents/{playerId}', () => {
-  const freeAgentDoc = {
-    name: 'Player 1',
-    position: 'MF',
-    age: 20,
-    joinedSeason: 1,
-    releasedFromTeamId: 't1',
-    releasedFromTeamName: 'Team 1',
-    releasedSeason: 1,
-  }
-
-  async function seedTeam() {
-    await testEnv.withSecurityRulesDisabled(async (context) => {
-      await setDoc(doc(context.firestore(), 'leagues/superleague/teams/t1'), {
-        name: 'Team 1',
-        managerUid: 'manager-1',
-        managerName: 'Manager 1',
-        isForfeited: false,
-      })
-    })
-  }
-
-  it('อ่านได้แม้ไม่ login', async () => {
-    const unauth = testEnv.unauthenticatedContext()
-    await assertSucceeds(getDoc(doc(unauth.firestore(), 'leagues/superleague/freeAgents/p1')))
-  })
-
-  it('manager ที่คุมทีมที่ปล่อยผู้เล่นจริง สร้างได้', async () => {
-    await seedTeam()
-    const manager = testEnv.authenticatedContext('manager-1', { role: 'manager' })
-    await assertSucceeds(
-      setDoc(doc(manager.firestore(), 'leagues/superleague/freeAgents/p1'), freeAgentDoc),
-    )
-  })
-
-  it('manager ทีมอื่น สร้างแทนไม่ได้ (ปลอมว่าเป็นทีมที่ปล่อยจริง)', async () => {
-    await seedTeam()
-    const outsider = testEnv.authenticatedContext('manager-2', { role: 'manager' })
-    await assertFails(
-      setDoc(doc(outsider.firestore(), 'leagues/superleague/freeAgents/p1'), freeAgentDoc),
-    )
-  })
-
-  it('manager แก้/ลบ free agent ที่มีอยู่แล้วไม่ได้ (สิทธิ์ admin เท่านั้น)', async () => {
-    await seedTeam()
-    await testEnv.withSecurityRulesDisabled(async (context) => {
-      await setDoc(doc(context.firestore(), 'leagues/superleague/freeAgents/p1'), freeAgentDoc)
-    })
-    const manager = testEnv.authenticatedContext('manager-1', { role: 'manager' })
-    await assertFails(
-      updateDoc(doc(manager.firestore(), 'leagues/superleague/freeAgents/p1'), { age: 21 }),
-    )
-  })
-})
-
-describe('leagues/{leagueId}/releaseLog/{logId}', () => {
-  const releaseLogDoc = { playerId: 'p1', playerName: 'Player 1', fromTeamId: 't1', season: 1 }
-
-  async function seedTeam() {
-    await testEnv.withSecurityRulesDisabled(async (context) => {
-      await setDoc(doc(context.firestore(), 'leagues/superleague/teams/t1'), {
-        name: 'Team 1',
-        managerUid: 'manager-1',
-        managerName: 'Manager 1',
-        isForfeited: false,
-      })
-    })
-  }
-
-  it('manager ที่คุมทีมที่ปล่อยผู้เล่นจริง สร้าง log ได้', async () => {
-    await seedTeam()
-    const manager = testEnv.authenticatedContext('manager-1', { role: 'manager' })
-    await assertSucceeds(
-      setDoc(doc(manager.firestore(), 'leagues/superleague/releaseLog/1_t1_p1'), releaseLogDoc),
-    )
-  })
-
-  it('manager ทีมอื่น สร้าง log แทนทีมนี้ไม่ได้', async () => {
-    await seedTeam()
-    const outsider = testEnv.authenticatedContext('manager-2', { role: 'manager' })
-    await assertFails(
-      setDoc(doc(outsider.firestore(), 'leagues/superleague/releaseLog/1_t1_p1'), releaseLogDoc),
-    )
-  })
-
-  it('แก้/ลบ log ไม่ได้แม้เป็น admin (immutable event ตาม guideline #6)', async () => {
-    await seedTeam()
-    await testEnv.withSecurityRulesDisabled(async (context) => {
-      await setDoc(
-        doc(context.firestore(), 'leagues/superleague/releaseLog/1_t1_p1'),
-        releaseLogDoc,
-      )
-    })
-    const admin = testEnv.authenticatedContext('admin-1', { role: 'admin' })
-    await assertFails(
-      updateDoc(doc(admin.firestore(), 'leagues/superleague/releaseLog/1_t1_p1'), { season: 2 }),
-    )
-    await assertFails(
-      deleteDoc(doc(admin.firestore(), 'leagues/superleague/releaseLog/1_t1_p1')),
-    )
-  })
-})
-
-describe('leagues/{leagueId}/saleOffers/{offerId}', () => {
-  const offerDoc = {
+describe('leagues/{leagueId}/teams/{teamId}/transactions/{txId}', () => {
+  const txDoc = {
+    type: 'income',
+    category: 'sell_off',
+    desc: 'ย่อยนักเตะ Player 1',
+    amount: 2,
     season: 1,
-    fromTeamId: 't1',
-    fromTeamName: 'Team 1',
-    toTeamId: 't2',
-    toTeamName: 'Team 2',
-    playerId: 'p1',
-    playerName: 'Player 1',
-    playerPosition: 'MF',
-    playerAge: 20,
-    price: 100,
-    status: 'pending',
-    proposedBy: 'seller',
   }
 
   async function seedTeams() {
@@ -280,85 +234,111 @@ describe('leagues/{leagueId}/saleOffers/{offerId}', () => {
         managerUid: 'manager-1',
         managerName: 'Manager 1',
         isForfeited: false,
-      })
-      await setDoc(doc(context.firestore(), 'leagues/superleague/teams/t2'), {
-        name: 'Team 2',
-        managerUid: 'manager-2',
-        managerName: 'Manager 2',
-        isForfeited: false,
+        balance: 10,
       })
     })
   }
 
-  it('ผู้ขาย (fromTeam) สร้างข้อเสนอได้', async () => {
+  it('อ่านได้แม้ไม่ login', async () => {
     await seedTeams()
-    const seller = testEnv.authenticatedContext('manager-1', { role: 'manager' })
+    const unauth = testEnv.unauthenticatedContext()
     await assertSucceeds(
-      setDoc(doc(seller.firestore(), 'leagues/superleague/saleOffers/o1'), offerDoc),
+      getDoc(doc(unauth.firestore(), 'leagues/superleague/teams/t1/transactions/tx1')),
     )
   })
 
-  it('ผู้ซื้อ (toTeam) สร้างข้อเสนอได้เหมือนกัน', async () => {
+  it('manager เจ้าของทีมสร้าง transaction ของทีมตัวเองได้ (ย่อยนักเตะ)', async () => {
     await seedTeams()
-    const buyer = testEnv.authenticatedContext('manager-2', { role: 'manager' })
+    const manager = testEnv.authenticatedContext('manager-1', { role: 'manager' })
     await assertSucceeds(
-      setDoc(doc(buyer.firestore(), 'leagues/superleague/saleOffers/o1'), {
-        ...offerDoc,
-        proposedBy: 'buyer',
+      setDoc(doc(manager.firestore(), 'leagues/superleague/teams/t1/transactions/tx1'), txDoc),
+    )
+  })
+
+  it('manager ทีมอื่นสร้าง transaction แทนทีมนี้ไม่ได้', async () => {
+    await seedTeams()
+    const outsider = testEnv.authenticatedContext('manager-2', { role: 'manager' })
+    await assertFails(
+      setDoc(doc(outsider.firestore(), 'leagues/superleague/teams/t1/transactions/tx1'), txDoc),
+    )
+  })
+
+  it('admin สร้างได้', async () => {
+    await seedTeams()
+    const admin = testEnv.authenticatedContext('admin-1', { role: 'admin' })
+    await assertSucceeds(
+      setDoc(doc(admin.firestore(), 'leagues/superleague/teams/t1/transactions/tx1'), txDoc),
+    )
+  })
+
+  it('แก้/ลบไม่ได้แม้เป็น admin (immutable ledger)', async () => {
+    await seedTeams()
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), 'leagues/superleague/teams/t1/transactions/tx1'), txDoc)
+    })
+    const admin = testEnv.authenticatedContext('admin-1', { role: 'admin' })
+    await assertFails(
+      updateDoc(doc(admin.firestore(), 'leagues/superleague/teams/t1/transactions/tx1'), {
+        amount: 999,
       }),
     )
-  })
-
-  it('ทีมที่ไม่เกี่ยวข้องสร้างข้อเสนอแทนไม่ได้', async () => {
-    await seedTeams()
-    await testEnv.withSecurityRulesDisabled(async (context) => {
-      await setDoc(doc(context.firestore(), 'leagues/superleague/teams/t3'), {
-        name: 'Team 3',
-        managerUid: 'manager-3',
-        managerName: 'Manager 3',
-        isForfeited: false,
-      })
-    })
-    const outsider = testEnv.authenticatedContext('manager-3', { role: 'manager' })
     await assertFails(
-      setDoc(doc(outsider.firestore(), 'leagues/superleague/saleOffers/o1'), offerDoc),
+      deleteDoc(doc(admin.firestore(), 'leagues/superleague/teams/t1/transactions/tx1')),
     )
   })
+})
 
-  async function seedPendingOffer() {
-    await seedTeams()
-    await testEnv.withSecurityRulesDisabled(async (context) => {
-      await setDoc(doc(context.firestore(), 'leagues/superleague/saleOffers/o1'), offerDoc)
-    })
+describe('leagues/{leagueId}/tearRequests/{requestId}', () => {
+  const tearDoc = {
+    season: 1,
+    requesterTeamId: 't1',
+    requesterTeamName: 'Team 1',
+    targetTeamId: 't2',
+    targetTeamName: 'Team 2',
+    playerId: 'p1',
+    playerName: 'Player 1',
+    status: 'pending',
   }
 
-  it('อีกฝ่าย (toTeam) ยอมรับได้ (แก้แค่ status)', async () => {
-    await seedPendingOffer()
-    const buyer = testEnv.authenticatedContext('manager-2', { role: 'manager' })
+  it('อ่านได้แม้ไม่ login', async () => {
+    const unauth = testEnv.unauthenticatedContext()
+    await assertSucceeds(getDoc(doc(unauth.firestore(), 'leagues/superleague/tearRequests/r1')))
+  })
+
+  it('manager ที่ signed in ยื่นคำขอได้ (ทีมไหนก็ได้ รวมถึงยื่นแทนทีมอื่น)', async () => {
+    const manager = testEnv.authenticatedContext('manager-3', { role: 'manager' })
     await assertSucceeds(
-      updateDoc(doc(buyer.firestore(), 'leagues/superleague/saleOffers/o1'), {
-        status: 'accepted',
+      setDoc(doc(manager.firestore(), 'leagues/superleague/tearRequests/r1'), tearDoc),
+    )
+  })
+
+  it('ไม่ login ยื่นไม่ได้', async () => {
+    const unauth = testEnv.unauthenticatedContext()
+    await assertFails(
+      setDoc(doc(unauth.firestore(), 'leagues/superleague/tearRequests/r1'), tearDoc),
+    )
+  })
+
+  it('manager แก้สถานะ (ประมวลผล) เองไม่ได้ ต้องเป็น admin ตอนจบฤดูกาลเท่านั้น', async () => {
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), 'leagues/superleague/tearRequests/r1'), tearDoc)
+    })
+    const manager = testEnv.authenticatedContext('manager-1', { role: 'manager' })
+    await assertFails(
+      updateDoc(doc(manager.firestore(), 'leagues/superleague/tearRequests/r1'), {
+        status: 'success',
       }),
     )
   })
 
-  it('แก้ field อื่นพ่วงไปกับ status ไม่ได้ (เช่นสวมราคาใหม่)', async () => {
-    await seedPendingOffer()
-    const buyer = testEnv.authenticatedContext('manager-2', { role: 'manager' })
-    await assertFails(
-      updateDoc(doc(buyer.firestore(), 'leagues/superleague/saleOffers/o1'), {
-        status: 'accepted',
-        price: 1,
-      }),
-    )
-  })
-
-  it('ทีมที่ไม่เกี่ยวข้องแก้สถานะไม่ได้', async () => {
-    await seedPendingOffer()
-    const outsider = testEnv.authenticatedContext('manager-3', { role: 'manager' })
-    await assertFails(
-      updateDoc(doc(outsider.firestore(), 'leagues/superleague/saleOffers/o1'), {
-        status: 'accepted',
+  it('admin แก้สถานะได้ (เปิดเผยผลตอนจบฤดูกาล)', async () => {
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), 'leagues/superleague/tearRequests/r1'), tearDoc)
+    })
+    const admin = testEnv.authenticatedContext('admin-1', { role: 'admin' })
+    await assertSucceeds(
+      updateDoc(doc(admin.firestore(), 'leagues/superleague/tearRequests/r1'), {
+        status: 'success',
       }),
     )
   })
@@ -367,7 +347,7 @@ describe('leagues/{leagueId}/saleOffers/{offerId}', () => {
 describe('leagues/{leagueId}/transfers/{transferId}', () => {
   const transferDoc = {
     season: 1,
-    type: 'simple_sale',
+    type: 'auction',
     fromTeamId: 't1',
     toTeamId: 't2',
     playerId: 'p1',

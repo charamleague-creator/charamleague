@@ -10,22 +10,31 @@ import {
   onSnapshot,
   query,
   runTransaction,
+  serverTimestamp,
   where,
   writeBatch,
 } from 'firebase/firestore'
 import { buildCurrentAdminLogWrite } from '@/features/adminLog/api'
 import { db } from '@/lib/firebase'
 import { generateRoundRobin } from './fixtures'
+import {
+  TAG_VALUE,
+  TEAR_BUYER_COST,
+  TEAR_ORIGIN_COMPENSATION,
+  auctionSellerProceeds,
+  blockedTearPairKey,
+  resolveTearRequests,
+} from './finance'
 import { canReceive, canSell } from './quotas'
 import type {
   AuctionListing,
-  FreeAgent,
   League,
   LeagueStatus,
   Match,
   Player,
-  SaleOffer,
   Team,
+  TearRequest,
+  Transaction,
   Transfer,
 } from './types'
 
@@ -43,17 +52,17 @@ function matchesCol(leagueId: string) {
 function playersCol(leagueId: string, teamId: string) {
   return collection(db, 'leagues', leagueId, 'teams', teamId, 'players')
 }
-function freeAgentsCol(leagueId: string) {
-  return collection(db, 'leagues', leagueId, 'freeAgents')
-}
 function auctionListingsCol(leagueId: string) {
   return collection(db, 'leagues', leagueId, 'auctionListings')
 }
-function saleOffersCol(leagueId: string) {
-  return collection(db, 'leagues', leagueId, 'saleOffers')
-}
 function transfersCol(leagueId: string) {
   return collection(db, 'leagues', leagueId, 'transfers')
+}
+function transactionsCol(leagueId: string, teamId: string) {
+  return collection(db, 'leagues', leagueId, 'teams', teamId, 'transactions')
+}
+function tearRequestsCol(leagueId: string) {
+  return collection(db, 'leagues', leagueId, 'tearRequests')
 }
 
 function toLeague(snap: QueryDocumentSnapshot<DocumentData>): League {
@@ -73,6 +82,7 @@ function toTeam(snap: QueryDocumentSnapshot<DocumentData>): Team {
     managerUid: data.managerUid,
     managerName: data.managerName,
     isForfeited: data.isForfeited,
+    balance: data.balance,
   }
 }
 function toMatch(snap: QueryDocumentSnapshot<DocumentData>): Match {
@@ -99,6 +109,7 @@ function toPlayer(snap: QueryDocumentSnapshot<DocumentData>): Player {
     position: data.position,
     age: data.age,
     joinedSeason: data.joinedSeason,
+    tag: data.tag,
   }
 }
 
@@ -113,7 +124,13 @@ export function subscribePlayers(
 export async function addPlayer(
   leagueId: string,
   teamId: string,
-  input: { name: string; position: Player['position']; age: number; joinedSeason: number },
+  input: {
+    name: string
+    position: Player['position']
+    age: number
+    joinedSeason: number
+    tag: Player['tag']
+  },
 ): Promise<void> {
   await addDoc(playersCol(leagueId, teamId), input)
 }
@@ -126,91 +143,64 @@ export async function removePlayer(
   await deleteDoc(doc(db, 'leagues', leagueId, 'teams', teamId, 'players', playerId))
 }
 
-function toFreeAgent(snap: QueryDocumentSnapshot<DocumentData>): FreeAgent {
+function toTransaction(snap: QueryDocumentSnapshot<DocumentData>): Transaction {
   const data = snap.data()
   return {
     id: snap.id,
-    name: data.name,
-    position: data.position,
-    age: data.age,
-    joinedSeason: data.joinedSeason,
-    releasedFromTeamId: data.releasedFromTeamId,
-    releasedFromTeamName: data.releasedFromTeamName,
-    releasedSeason: data.releasedSeason,
+    type: data.type,
+    category: data.category,
+    desc: data.desc,
+    amount: data.amount,
+    season: data.season,
   }
 }
 
-export function subscribeFreeAgents(leagueId: string, onChange: (agents: FreeAgent[]) => void) {
-  return onSnapshot(freeAgentsCol(leagueId), (snap) => onChange(snap.docs.map(toFreeAgent)))
+export function subscribeTransactions(
+  leagueId: string,
+  teamId: string,
+  onChange: (transactions: Transaction[]) => void,
+) {
+  return onSnapshot(transactionsCol(leagueId, teamId), (snap) =>
+    onChange(snap.docs.map(toTransaction)),
+  )
 }
 
 /**
- * ฉีกสัญญา — ปล่อยผู้เล่นออกจากทีมไปเป็นผู้เล่นอิสระ (free agent)
- * คง playerId เดิมตลอดการย้าย เพื่อให้ตรวจ ping-pong (guideline #4/#6) และรักษา identity ได้
+ * ย่อยนักเตะ — ลบผู้เล่นออกจากระบบถาวร (ไม่มีทีมผู้ซื้อ ไม่เข้า free agent pool ใดๆ)
+ * แลกเงินคงที่ตาม Tag (TAG_VALUE, หน่วย M) เข้าบัญชีทีม
  */
-export async function releasePlayer(leagueId: string, teamId: string, playerId: string) {
+export async function sellOffPlayer(leagueId: string, teamId: string, playerId: string) {
   const leagueSnap = await getDoc(doc(db, 'leagues', leagueId))
   if (!leagueSnap.exists()) throw new Error('ไม่พบลีก')
   const league = toLeague(leagueSnap as QueryDocumentSnapshot<DocumentData>)
-  if (league.status !== 'in_season')
-    throw new Error('ฉีกสัญญาได้เฉพาะตอนลีกกำลังแข่งขันเท่านั้น')
+  if (league.status !== 'in_season') throw new Error('ย่อยนักเตะได้เฉพาะตอนลีกกำลังแข่งขันเท่านั้น')
 
-  const [teamSnap, playerSnap] = await Promise.all([
-    getDoc(doc(db, 'leagues', leagueId, 'teams', teamId)),
+  const [playerSnap, teamSnap] = await Promise.all([
     getDoc(doc(db, 'leagues', leagueId, 'teams', teamId, 'players', playerId)),
+    getDoc(doc(db, 'leagues', leagueId, 'teams', teamId)),
   ])
-  if (!teamSnap.exists()) throw new Error('ไม่พบทีม')
   if (!playerSnap.exists()) throw new Error('ไม่พบผู้เล่น')
-  const team = toTeam(teamSnap as QueryDocumentSnapshot<DocumentData>)
+  if (!teamSnap.exists()) throw new Error('ไม่พบทีม')
   const player = toPlayer(playerSnap as QueryDocumentSnapshot<DocumentData>)
+  const team = toTeam(teamSnap as QueryDocumentSnapshot<DocumentData>)
 
-  const releaseLogId = `${league.currentSeason}_${teamId}_${playerId}`
-  const existingRelease = await getDoc(doc(db, 'leagues', leagueId, 'releaseLog', releaseLogId))
-  if (existingRelease.exists()) {
-    throw new Error(
-      `ห้ามฉีกสัญญา "${player.name}" ซ้ำจากทีมเดียวกันในฤดูกาลนี้ (ป้องกัน ping-pong)`,
-    )
-  }
+  const payout = TAG_VALUE[player.tag]
 
   await commitInChunks([
     (batch) => batch.delete(doc(db, 'leagues', leagueId, 'teams', teamId, 'players', playerId)),
     (batch) =>
-      batch.set(doc(db, 'leagues', leagueId, 'freeAgents', playerId), {
-        name: player.name,
-        position: player.position,
-        age: player.age,
-        joinedSeason: player.joinedSeason,
-        releasedFromTeamId: teamId,
-        releasedFromTeamName: team.name,
-        releasedSeason: league.currentSeason,
+      batch.update(doc(db, 'leagues', leagueId, 'teams', teamId), {
+        balance: team.balance + payout,
       }),
     (batch) =>
-      batch.set(doc(db, 'leagues', leagueId, 'releaseLog', releaseLogId), {
-        playerId,
-        playerName: player.name,
-        fromTeamId: teamId,
+      batch.set(doc(transactionsCol(leagueId, teamId)), {
+        type: 'income',
+        category: 'sell_off',
+        desc: `ย่อยนักเตะ ${player.name} (Tag: ${player.tag})`,
+        amount: payout,
         season: league.currentSeason,
       }),
   ])
-}
-
-function toSaleOffer(snap: QueryDocumentSnapshot<DocumentData>): SaleOffer {
-  const data = snap.data()
-  return {
-    id: snap.id,
-    season: data.season,
-    fromTeamId: data.fromTeamId,
-    fromTeamName: data.fromTeamName,
-    toTeamId: data.toTeamId,
-    toTeamName: data.toTeamName,
-    playerId: data.playerId,
-    playerName: data.playerName,
-    playerPosition: data.playerPosition,
-    playerAge: data.playerAge,
-    price: data.price,
-    status: data.status,
-    proposedBy: data.proposedBy,
-  }
 }
 
 function toTransfer(snap: QueryDocumentSnapshot<DocumentData>): Transfer {
@@ -227,10 +217,6 @@ function toTransfer(snap: QueryDocumentSnapshot<DocumentData>): Transfer {
   }
 }
 
-export function subscribeSaleOffers(leagueId: string, onChange: (offers: SaleOffer[]) => void) {
-  return onSnapshot(saleOffersCol(leagueId), (snap) => onChange(snap.docs.map(toSaleOffer)))
-}
-
 export function subscribeSeasonTransfers(
   leagueId: string,
   season: number,
@@ -238,118 +224,6 @@ export function subscribeSeasonTransfers(
 ) {
   const q = query(transfersCol(leagueId), where('season', '==', season))
   return onSnapshot(q, (snap) => onChange(snap.docs.map(toTransfer)))
-}
-
-/**
- * เสนอขายตรง (ขายย่อย) — ทีมใดทีมหนึ่ง (ผู้ขายหรือผู้ซื้อ) เสนอราคาก่อน
- * ยังไม่ย้ายผู้เล่นจริงจนกว่าอีกฝ่ายจะกด "ยอมรับ" แล้วแอดมิน "ปิดการขาย" (completeSale)
- */
-export async function createSaleOffer(
-  leagueId: string,
-  input: {
-    fromTeamId: string
-    fromTeamName: string
-    toTeamId: string
-    toTeamName: string
-    playerId: string
-    playerName: string
-    playerPosition: Player['position']
-    playerAge: number
-    price: number
-    proposedBy: 'seller' | 'buyer'
-  },
-): Promise<void> {
-  const leagueSnap = await getDoc(doc(db, 'leagues', leagueId))
-  if (!leagueSnap.exists()) throw new Error('ไม่พบลีก')
-  const league = toLeague(leagueSnap as QueryDocumentSnapshot<DocumentData>)
-  if (league.status !== 'in_season')
-    throw new Error('เสนอซื้อ-ขายนักเตะได้เฉพาะตอนลีกกำลังแข่งขันเท่านั้น')
-  if (input.fromTeamId === input.toTeamId) throw new Error('ทีมต้นทางและปลายทางต้องไม่ใช่ทีมเดียวกัน')
-
-  await addDoc(saleOffersCol(leagueId), {
-    ...input,
-    season: league.currentSeason,
-    status: 'pending',
-  })
-}
-
-export async function respondToSaleOffer(
-  leagueId: string,
-  offerId: string,
-  status: 'accepted' | 'rejected' | 'cancelled',
-): Promise<void> {
-  await commitInChunks([
-    (batch) => batch.update(doc(db, 'leagues', leagueId, 'saleOffers', offerId), { status }),
-  ])
-}
-
-/**
- * แอดมินปิดการขาย — ย้ายผู้เล่นจริง (คง playerId เดิม) + เช็คโควตาก่อนบันทึกเสมอ (guideline #5)
- * ต้องทำโดยแอดมินเพราะ Firestore Rules ตรวจข้าม "ทีมสองทีม" พร้อมกัน (ลบจากทีม A + สร้างในทีม B)
- * ในการเขียนเดียวกันไม่ได้ ถ้าไม่ผ่านสิทธิ์ admin ที่ bypass ทั้งสองฝั่งอยู่แล้ว
- */
-export async function completeSale(leagueId: string, offerId: string): Promise<void> {
-  const [leagueSnap, offerSnap] = await Promise.all([
-    getDoc(doc(db, 'leagues', leagueId)),
-    getDoc(doc(db, 'leagues', leagueId, 'saleOffers', offerId)),
-  ])
-  if (!leagueSnap.exists()) throw new Error('ไม่พบลีก')
-  if (!offerSnap.exists()) throw new Error('ไม่พบข้อเสนอ')
-  const league = toLeague(leagueSnap as QueryDocumentSnapshot<DocumentData>)
-  const offer = toSaleOffer(offerSnap as QueryDocumentSnapshot<DocumentData>)
-  if (league.status !== 'in_season')
-    throw new Error('ปิดการขายได้เฉพาะตอนลีกกำลังแข่งขันเท่านั้น')
-  if (offer.status !== 'accepted') throw new Error('ต้องรอให้อีกทีมยอมรับข้อเสนอก่อน')
-
-  const transfersSnap = await getDocs(
-    query(transfersCol(leagueId), where('season', '==', league.currentSeason)),
-  )
-  const transfers = transfersSnap.docs.map(toTransfer)
-
-  const sellCheck = canSell(transfers, offer.fromTeamId, league.currentSeason, 'simple_sale')
-  if (!sellCheck.allowed) throw new Error(sellCheck.reason)
-  const receiveCheck = canReceive(transfers, offer.toTeamId, league.currentSeason)
-  if (!receiveCheck.allowed) throw new Error(receiveCheck.reason)
-
-  const playerSnap = await getDoc(
-    doc(db, 'leagues', leagueId, 'teams', offer.fromTeamId, 'players', offer.playerId),
-  )
-  if (!playerSnap.exists()) throw new Error('ไม่พบผู้เล่นในทีมต้นทาง (อาจถูกย้ายไปแล้ว)')
-  const player = toPlayer(playerSnap as QueryDocumentSnapshot<DocumentData>)
-
-  await commitInChunks([
-    (batch) =>
-      batch.delete(
-        doc(db, 'leagues', leagueId, 'teams', offer.fromTeamId, 'players', offer.playerId),
-      ),
-    (batch) =>
-      batch.set(doc(db, 'leagues', leagueId, 'teams', offer.toTeamId, 'players', offer.playerId), {
-        name: player.name,
-        position: player.position,
-        age: player.age,
-        joinedSeason: player.joinedSeason,
-      }),
-    (batch) =>
-      batch.set(doc(transfersCol(leagueId)), {
-        season: league.currentSeason,
-        type: 'simple_sale',
-        fromTeamId: offer.fromTeamId,
-        toTeamId: offer.toTeamId,
-        playerId: offer.playerId,
-        playerName: player.name,
-        price: offer.price,
-      }),
-    (batch) =>
-      batch.update(doc(db, 'leagues', leagueId, 'saleOffers', offerId), { status: 'completed' }),
-    buildCurrentAdminLogWrite('complete_sale', {
-      leagueId,
-      offerId,
-      fromTeamId: offer.fromTeamId,
-      toTeamId: offer.toTeamId,
-      playerId: offer.playerId,
-      price: offer.price,
-    }),
-  ])
 }
 
 function toAuctionListing(snap: QueryDocumentSnapshot<DocumentData>): AuctionListing {
@@ -380,7 +254,11 @@ export function subscribeAuctionListings(
   )
 }
 
-/** ทีมที่จะขายส่งเข้าคิวรอแอดมินอนุมัติ — ยังไม่นับเข้าโควตาจนกว่าจะอนุมัติ (ตามเอกสารข้อ 5.2) */
+/**
+ * ทีมที่จะขายส่งเข้าคิวรอแอดมินอนุมัติ — ยังไม่นับเข้าโควตาจนกว่าจะอนุมัติ (ตามเอกสารข้อ 5.2)
+ * "การันตี" (guaranteedBuyerTeamId/Price) = ราคาเริ่มต้นที่ตกลงกันไว้ล่วงหน้าระหว่าง 2 ทีม
+ * ยังต้องผ่านประมูลปกติ ทีมอื่นเสนอราคาสูงกว่าแย่งไปได้ตามระบบเดิม
+ */
 export async function createAuctionListing(
   leagueId: string,
   input: {
@@ -391,6 +269,8 @@ export async function createAuctionListing(
     playerPosition: Player['position']
     playerAge: number
     startingPrice: number
+    guaranteedBuyerTeamId?: string
+    guaranteedBuyerTeamName?: string
   },
 ): Promise<void> {
   const leagueSnap = await getDoc(doc(db, 'leagues', leagueId))
@@ -398,14 +278,25 @@ export async function createAuctionListing(
   const league = toLeague(leagueSnap as QueryDocumentSnapshot<DocumentData>)
   if (league.status !== 'in_season')
     throw new Error('ส่งเข้าประมูลได้เฉพาะตอนลีกกำลังแข่งขันเท่านั้น')
+  if (input.guaranteedBuyerTeamId && input.guaranteedBuyerTeamId === input.sellerTeamId) {
+    throw new Error('ทีมที่การันตีซื้อต้องไม่ใช่ทีมผู้ขาย')
+  }
+
+  const hasGuarantee = Boolean(input.guaranteedBuyerTeamId)
 
   await addDoc(auctionListingsCol(leagueId), {
-    ...input,
+    sellerTeamId: input.sellerTeamId,
+    sellerTeamName: input.sellerTeamName,
+    playerId: input.playerId,
+    playerName: input.playerName,
+    playerPosition: input.playerPosition,
+    playerAge: input.playerAge,
+    startingPrice: input.startingPrice,
     season: league.currentSeason,
     status: 'pending_approval',
-    highestBid: null,
-    highestBidderTeamId: null,
-    highestBidderTeamName: null,
+    highestBid: hasGuarantee ? input.startingPrice : null,
+    highestBidderTeamId: hasGuarantee ? input.guaranteedBuyerTeamId : null,
+    highestBidderTeamName: hasGuarantee ? input.guaranteedBuyerTeamName : null,
   })
 }
 
@@ -490,6 +381,7 @@ export async function placeBid(
 
 /**
  * แอดมินปิดประมูล — กำหนดผู้ชนะจากราคาสูงสุด ย้ายผู้เล่นจริง + เช็คโควตาผู้ชนะก่อนบันทึก (guideline #5)
+ * หักภาษี 30% จากผู้ขาย: ผู้ซื้อจ่ายเต็มราคา ผู้ขายได้รับ 70% เข้าบัญชี ทั้งสองฝั่งบันทึกเป็น transaction
  */
 export async function closeAuction(leagueId: string, listingId: string): Promise<void> {
   const [leagueSnap, listingSnap] = await Promise.all([
@@ -513,18 +405,27 @@ export async function closeAuction(leagueId: string, listingId: string): Promise
     return
   }
 
+  const winnerTeamId = listing.highestBidderTeamId
+  const winnerPrice = listing.highestBid as number
+
   const transfersSnap = await getDocs(
     query(transfersCol(leagueId), where('season', '==', league.currentSeason)),
   )
   const transfers = transfersSnap.docs.map(toTransfer)
-  const receiveCheck = canReceive(transfers, listing.highestBidderTeamId, league.currentSeason)
+  const receiveCheck = canReceive(transfers, winnerTeamId, league.currentSeason)
   if (!receiveCheck.allowed) throw new Error(receiveCheck.reason)
 
-  const playerSnap = await getDoc(
-    doc(db, 'leagues', leagueId, 'teams', listing.sellerTeamId, 'players', listing.playerId),
-  )
+  const [playerSnap, sellerTeamSnap, buyerTeamSnap] = await Promise.all([
+    getDoc(doc(db, 'leagues', leagueId, 'teams', listing.sellerTeamId, 'players', listing.playerId)),
+    getDoc(doc(db, 'leagues', leagueId, 'teams', listing.sellerTeamId)),
+    getDoc(doc(db, 'leagues', leagueId, 'teams', winnerTeamId)),
+  ])
   if (!playerSnap.exists()) throw new Error('ไม่พบผู้เล่นในทีมต้นทาง (อาจถูกย้ายไปแล้ว)')
+  if (!sellerTeamSnap.exists() || !buyerTeamSnap.exists()) throw new Error('ไม่พบทีมที่เกี่ยวข้อง')
   const player = toPlayer(playerSnap as QueryDocumentSnapshot<DocumentData>)
+  const sellerTeam = toTeam(sellerTeamSnap as QueryDocumentSnapshot<DocumentData>)
+  const buyerTeam = toTeam(buyerTeamSnap as QueryDocumentSnapshot<DocumentData>)
+  const sellerProceeds = auctionSellerProceeds(winnerPrice)
 
   await commitInChunks([
     (batch) =>
@@ -532,44 +433,111 @@ export async function closeAuction(leagueId: string, listingId: string): Promise
         doc(db, 'leagues', leagueId, 'teams', listing.sellerTeamId, 'players', listing.playerId),
       ),
     (batch) =>
-      batch.set(
-        doc(
-          db,
-          'leagues',
-          leagueId,
-          'teams',
-          listing.highestBidderTeamId as string,
-          'players',
-          listing.playerId,
-        ),
-        {
-          name: player.name,
-          position: player.position,
-          age: player.age,
-          joinedSeason: player.joinedSeason,
-        },
-      ),
+      batch.set(doc(db, 'leagues', leagueId, 'teams', winnerTeamId, 'players', listing.playerId), {
+        name: player.name,
+        position: player.position,
+        age: player.age,
+        joinedSeason: player.joinedSeason,
+        tag: player.tag,
+      }),
     (batch) =>
       batch.set(doc(transfersCol(leagueId)), {
         season: league.currentSeason,
         type: 'auction',
         fromTeamId: listing.sellerTeamId,
-        toTeamId: listing.highestBidderTeamId,
+        toTeamId: winnerTeamId,
         playerId: listing.playerId,
         playerName: player.name,
-        price: listing.highestBid,
+        price: winnerPrice,
       }),
     (batch) =>
       batch.update(doc(db, 'leagues', leagueId, 'auctionListings', listingId), {
         status: 'closed',
       }),
+    (batch) =>
+      batch.update(doc(db, 'leagues', leagueId, 'teams', listing.sellerTeamId), {
+        balance: sellerTeam.balance + sellerProceeds,
+      }),
+    (batch) =>
+      batch.update(doc(db, 'leagues', leagueId, 'teams', winnerTeamId), {
+        balance: buyerTeam.balance - winnerPrice,
+      }),
+    (batch) =>
+      batch.set(doc(transactionsCol(leagueId, listing.sellerTeamId)), {
+        type: 'income',
+        category: 'auction_sale',
+        desc: `ขาย ${player.name} ผ่านประมูล (ราคาเต็ม ${winnerPrice}, หักภาษี 30%)`,
+        amount: sellerProceeds,
+        season: league.currentSeason,
+      }),
+    (batch) =>
+      batch.set(doc(transactionsCol(leagueId, winnerTeamId)), {
+        type: 'expense',
+        category: 'auction_purchase',
+        desc: `ซื้อ ${player.name} ผ่านประมูล`,
+        amount: winnerPrice,
+        season: league.currentSeason,
+      }),
     buildCurrentAdminLogWrite('close_auction', {
       leagueId,
       listingId,
-      winnerTeamId: listing.highestBidderTeamId,
-      price: listing.highestBid,
+      winnerTeamId,
+      price: winnerPrice,
+      sellerProceeds,
     }),
   ])
+}
+
+function toTearRequest(snap: QueryDocumentSnapshot<DocumentData>): TearRequest {
+  const data = snap.data()
+  return {
+    id: snap.id,
+    season: data.season,
+    requesterTeamId: data.requesterTeamId,
+    requesterTeamName: data.requesterTeamName,
+    targetTeamId: data.targetTeamId,
+    targetTeamName: data.targetTeamName,
+    playerId: data.playerId,
+    playerName: data.playerName,
+    status: data.status,
+    requestedAtMs: data.requestedAt ? data.requestedAt.toMillis() : null,
+  }
+}
+
+export function subscribeTearRequests(
+  leagueId: string,
+  onChange: (requests: TearRequest[]) => void,
+) {
+  return onSnapshot(tearRequestsCol(leagueId), (snap) => onChange(snap.docs.map(toTearRequest)))
+}
+
+/**
+ * ยื่นคำขอฉีกสัญญา — คิวรอ ไม่ประมวลผลทันที เปิดเผยพร้อมกันหมดตอนจบฤดูกาล (endSeason)
+ */
+export async function createTearRequest(
+  leagueId: string,
+  input: {
+    requesterTeamId: string
+    requesterTeamName: string
+    targetTeamId: string
+    targetTeamName: string
+    playerId: string
+    playerName: string
+  },
+): Promise<void> {
+  const leagueSnap = await getDoc(doc(db, 'leagues', leagueId))
+  if (!leagueSnap.exists()) throw new Error('ไม่พบลีก')
+  const league = toLeague(leagueSnap as QueryDocumentSnapshot<DocumentData>)
+  if (league.status !== 'in_season') throw new Error('ยื่นฉีกสัญญาได้เฉพาะตอนลีกกำลังแข่งขันเท่านั้น')
+  if (input.requesterTeamId === input.targetTeamId)
+    throw new Error('ทีมที่ยื่นและทีมเจ้าของนักเตะต้องไม่ใช่ทีมเดียวกัน')
+
+  await addDoc(tearRequestsCol(leagueId), {
+    ...input,
+    season: league.currentSeason,
+    status: 'pending',
+    requestedAt: serverTimestamp(),
+  })
 }
 
 export function subscribeLeagues(onChange: (leagues: League[]) => void) {
@@ -627,11 +595,46 @@ export async function deleteLeague(leagueId: string): Promise<void> {
   ])
 }
 
+/**
+ * balance เริ่มต้น: แอดมินกรอกเองตามความเหมาะสม (ไม่มีสูตรตายตัว เพราะทีมเข้าร่วมคนละฤดูกาลกัน)
+ * balance สะสมข้ามฤดูกาล ไม่รีเซ็ตตอนเริ่มฤดูกาลใหม่
+ */
 export async function createTeam(
   leagueId: string,
-  input: { name: string; managerUid: string; managerName: string },
+  input: { name: string; managerUid: string; managerName: string; balance: number },
 ): Promise<void> {
   await addDoc(teamsCol(leagueId), { ...input, isForfeited: false })
+}
+
+/** แอดมินปรับ balance มือ (เช่น แก้ไขข้อผิดพลาด, ปรับตามกรณีพิเศษ) — บันทึกเป็น transaction เสมอ */
+export async function adjustTeamBalance(
+  leagueId: string,
+  teamId: string,
+  delta: number,
+  desc: string,
+): Promise<void> {
+  const [leagueSnap, teamSnap] = await Promise.all([
+    getDoc(doc(db, 'leagues', leagueId)),
+    getDoc(doc(db, 'leagues', leagueId, 'teams', teamId)),
+  ])
+  if (!leagueSnap.exists()) throw new Error('ไม่พบลีก')
+  if (!teamSnap.exists()) throw new Error('ไม่พบทีม')
+  const league = toLeague(leagueSnap as QueryDocumentSnapshot<DocumentData>)
+  const team = toTeam(teamSnap as QueryDocumentSnapshot<DocumentData>)
+
+  await commitInChunks([
+    (batch) =>
+      batch.update(doc(db, 'leagues', leagueId, 'teams', teamId), { balance: team.balance + delta }),
+    (batch) =>
+      batch.set(doc(transactionsCol(leagueId, teamId)), {
+        type: delta >= 0 ? 'income' : 'expense',
+        category: 'admin_adjustment',
+        desc,
+        amount: Math.abs(delta),
+        season: league.currentSeason,
+      }),
+    buildCurrentAdminLogWrite('adjust_team_balance', { leagueId, teamId, delta, desc }),
+  ])
 }
 
 export async function setTeamForfeited(
@@ -667,6 +670,115 @@ async function commitInChunks(writes: Array<(batch: ReturnType<typeof writeBatch
     for (const write of writes.slice(i, i + BATCH_CHUNK_SIZE)) write(batch)
     await batch.commit()
   }
+}
+
+/**
+ * เปิดเผยผลฉีกสัญญาทั้งหมดของฤดูกาล พร้อมกันตอนจบฤดูกาล (เอกสารข้อ 4)
+ * กันปิงปอง: เทียบกับ tear ที่สำเร็จ "ครั้งล่าสุด" ของผู้เล่นแต่ละคน (ถ้ามี) ห้ามทีมที่เพิ่งเสียผู้เล่นไป
+ * ยื่นฉีกคืนจากทีมที่เพิ่งได้ไปในทันที
+ */
+async function resolveTearRequestsForSeason(leagueId: string, season: number) {
+  const [pendingSnap, allTearSnap, teamsSnap] = await Promise.all([
+    getDocs(query(tearRequestsCol(leagueId), where('season', '==', season), where('status', '==', 'pending'))),
+    getDocs(query(tearRequestsCol(leagueId), where('status', '==', 'success'))),
+    getDocs(teamsCol(leagueId)),
+  ])
+  const pending = pendingSnap.docs.map(toTearRequest)
+  if (pending.length === 0) return { writes: [] as Array<(batch: ReturnType<typeof writeBatch>) => void> }
+
+  const pastSuccesses = allTearSnap.docs.map(toTearRequest)
+  const lastSuccessByPlayer = new Map<string, TearRequest>()
+  for (const t of pastSuccesses) {
+    const existing = lastSuccessByPlayer.get(t.playerId)
+    if (!existing || (t.requestedAtMs ?? 0) > (existing.requestedAtMs ?? 0)) {
+      lastSuccessByPlayer.set(t.playerId, t)
+    }
+  }
+  const blockedPairs = new Set<string>()
+  for (const t of lastSuccessByPlayer.values()) {
+    blockedPairs.add(blockedTearPairKey(t.playerId, t.targetTeamId, t.requesterTeamId))
+  }
+
+  const teamById = new Map(teamsSnap.docs.map((d) => [d.id, toTeam(d)]))
+  const results = resolveTearRequests(
+    pending.map((r) => ({
+      id: r.id,
+      playerId: r.playerId,
+      requesterTeamId: r.requesterTeamId,
+      targetTeamId: r.targetTeamId,
+      requestedAtMs: r.requestedAtMs ?? 0,
+    })),
+    (teamId) => teamById.get(teamId)?.balance ?? 0,
+    blockedPairs,
+  )
+
+  const writes: Array<(batch: ReturnType<typeof writeBatch>) => void> = []
+  const balanceDelta = new Map<string, number>()
+  for (const result of results) {
+    const req = pending.find((r) => r.id === result.id) as TearRequest
+    writes.push((batch) =>
+      batch.update(doc(db, 'leagues', leagueId, 'tearRequests', result.id), {
+        status: result.status,
+      }),
+    )
+    if (result.status !== 'success') continue
+
+    balanceDelta.set(
+      req.requesterTeamId,
+      (balanceDelta.get(req.requesterTeamId) ?? 0) - TEAR_BUYER_COST,
+    )
+    balanceDelta.set(
+      req.targetTeamId,
+      (balanceDelta.get(req.targetTeamId) ?? 0) + TEAR_ORIGIN_COMPENSATION,
+    )
+
+    const playerSnap = await getDoc(
+      doc(db, 'leagues', leagueId, 'teams', req.targetTeamId, 'players', req.playerId),
+    )
+    if (!playerSnap.exists()) continue
+    const player = toPlayer(playerSnap as QueryDocumentSnapshot<DocumentData>)
+
+    writes.push((batch) =>
+      batch.delete(doc(db, 'leagues', leagueId, 'teams', req.targetTeamId, 'players', req.playerId)),
+    )
+    writes.push((batch) =>
+      batch.set(doc(db, 'leagues', leagueId, 'teams', req.requesterTeamId, 'players', req.playerId), {
+        name: player.name,
+        position: player.position,
+        age: player.age,
+        joinedSeason: player.joinedSeason,
+        tag: player.tag,
+      }),
+    )
+    writes.push((batch) =>
+      batch.set(doc(transactionsCol(leagueId, req.requesterTeamId)), {
+        type: 'expense',
+        category: 'tear_paid',
+        desc: `ฉีกสัญญาดึง ${player.name} จาก ${req.targetTeamName}`,
+        amount: TEAR_BUYER_COST,
+        season,
+      }),
+    )
+    writes.push((batch) =>
+      batch.set(doc(transactionsCol(leagueId, req.targetTeamId)), {
+        type: 'income',
+        category: 'tear_compensation',
+        desc: `ถูกฉีกสัญญา ${player.name} โดย ${req.requesterTeamName} (ค่าชดเชย)`,
+        amount: TEAR_ORIGIN_COMPENSATION,
+        season,
+      }),
+    )
+  }
+
+  for (const [teamId, delta] of balanceDelta) {
+    const team = teamById.get(teamId)
+    if (!team) continue
+    writes.push((batch) =>
+      batch.update(doc(db, 'leagues', leagueId, 'teams', teamId), { balance: team.balance + delta }),
+    )
+  }
+
+  return { writes }
 }
 
 export async function endSeason(leagueId: string): Promise<void> {
@@ -713,6 +825,10 @@ export async function endSeason(leagueId: string): Promise<void> {
       }),
     )
   }
+
+  const { writes: tearWrites } = await resolveTearRequestsForSeason(leagueId, league.currentSeason)
+  writes.push(...tearWrites)
+
   writes.push((batch) =>
     batch.update(doc(db, 'leagues', leagueId), { status: 'transfer_window' }),
   )
@@ -721,6 +837,7 @@ export async function endSeason(leagueId: string): Promise<void> {
       leagueId,
       season: league.currentSeason,
       byeMatches: scheduled.length,
+      tearRequestsResolved: tearWrites.length,
     }),
   )
   await commitInChunks(writes)

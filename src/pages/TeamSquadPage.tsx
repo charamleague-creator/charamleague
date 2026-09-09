@@ -2,18 +2,22 @@ import { type FormEvent, useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import {
   addPlayer,
+  adjustTeamBalance,
   createAuctionListing,
-  createSaleOffer,
-  releasePlayer,
+  createTearRequest,
   removePlayer,
+  sellOffPlayer,
   subscribeLeague,
   subscribePlayers,
   subscribeTeams,
+  subscribeTransactions,
 } from '@/features/leagues/api'
-import type { League, Player, PlayerPosition, Team } from '@/features/leagues/types'
+import { TAG_VALUE } from '@/features/leagues/finance'
+import type { League, Player, PlayerPosition, PlayerTag, Team, Transaction } from '@/features/leagues/types'
 import { useAuth } from '@/hooks/useAuth'
 
 const POSITIONS: PlayerPosition[] = ['GK', 'DF', 'MF', 'FW']
+const TAGS: PlayerTag[] = ['Academy', 'Academy72', 'Worldcup', 'นักเตะ65', 'Free']
 
 export default function TeamSquadPage() {
   const { leagueId, teamId } = useParams<{ leagueId: string; teamId: string }>()
@@ -21,6 +25,7 @@ export default function TeamSquadPage() {
   const [league, setLeague] = useState<League | null>(null)
   const [teams, setTeams] = useState<Team[]>([])
   const [players, setPlayers] = useState<Player[]>([])
+  const [transactions, setTransactions] = useState<Transaction[]>([])
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
@@ -38,12 +43,23 @@ export default function TeamSquadPage() {
     return subscribePlayers(leagueId, teamId, setPlayers)
   }, [leagueId, teamId])
 
+  useEffect(() => {
+    if (!leagueId || !teamId) return
+    return subscribeTransactions(leagueId, teamId, setTransactions)
+  }, [leagueId, teamId])
+
   if (!leagueId || !teamId) return null
   const currentLeagueId: string = leagueId
   const currentTeamId: string = teamId
   const team = teams.find((t) => t.id === teamId)
+  const myTeam = teams.find((t) => t.managerUid === user?.uid)
 
-  async function handleAdd(input: { name: string; position: PlayerPosition; age: number }) {
+  async function handleAdd(input: {
+    name: string
+    position: PlayerPosition
+    age: number
+    tag: PlayerTag
+  }) {
     setError(null)
     try {
       await addPlayer(currentLeagueId, currentTeamId, {
@@ -64,48 +80,27 @@ export default function TeamSquadPage() {
     }
   }
 
-  async function handleRelease(playerId: string) {
+  async function handleSellOff(playerId: string) {
     setError(null)
     try {
-      await releasePlayer(currentLeagueId, currentTeamId, playerId)
+      await sellOffPlayer(currentLeagueId, currentTeamId, playerId)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     }
   }
 
   const isOwnManager = !!user && !!team && user.uid === team.managerUid
-  const canRelease = role === 'admin' || isOwnManager
+  const canManageSquad = role === 'admin' || isOwnManager
   const otherTeams = teams.filter((t) => t.id !== teamId)
 
-  async function handleProposeSale(
+  async function handleListForAuction(
     player: Player,
-    toTeamId: string,
-    price: number,
+    startingPrice: number,
+    guaranteedBuyerTeamId?: string,
   ) {
     setError(null)
-    const toTeam = teams.find((t) => t.id === toTeamId)
-    if (!team || !toTeam) return
-    try {
-      await createSaleOffer(currentLeagueId, {
-        fromTeamId: currentTeamId,
-        fromTeamName: team.name,
-        toTeamId,
-        toTeamName: toTeam.name,
-        playerId: player.id,
-        playerName: player.name,
-        playerPosition: player.position,
-        playerAge: player.age,
-        price,
-        proposedBy: 'seller',
-      })
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-    }
-  }
-
-  async function handleListForAuction(player: Player, startingPrice: number) {
-    setError(null)
     if (!team) return
+    const guaranteedBuyerTeam = teams.find((t) => t.id === guaranteedBuyerTeamId)
     try {
       await createAuctionListing(currentLeagueId, {
         sellerTeamId: currentTeamId,
@@ -115,24 +110,59 @@ export default function TeamSquadPage() {
         playerPosition: player.position,
         playerAge: player.age,
         startingPrice,
+        guaranteedBuyerTeamId: guaranteedBuyerTeam?.id,
+        guaranteedBuyerTeamName: guaranteedBuyerTeam?.name,
       })
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     }
   }
 
+  async function handleTear(player: Player, requesterTeamId: string) {
+    setError(null)
+    const requesterTeam = teams.find((t) => t.id === requesterTeamId)
+    if (!team || !requesterTeam) return
+    try {
+      await createTearRequest(currentLeagueId, {
+        requesterTeamId: requesterTeam.id,
+        requesterTeamName: requesterTeam.name,
+        targetTeamId: team.id,
+        targetTeamName: team.name,
+        playerId: player.id,
+        playerName: player.name,
+      })
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  async function handleAdjustBalance(delta: number, desc: string) {
+    setError(null)
+    try {
+      await adjustTeamBalance(currentLeagueId, currentTeamId, delta, desc)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  const canRequestTearAsOwnTeam = !!myTeam && myTeam.id !== teamId
+  const canRequestTearAsAdmin = role === 'admin' && otherTeams.length > 0
+
   return (
     <main style={{ maxWidth: 640, margin: '2rem auto' }}>
       <h1>{team?.name ?? 'ทีม'} — รายชื่อผู้เล่น</h1>
-      <p>จำนวนผู้เล่นในทีม: {players.length}</p>
+      <p>
+        จำนวนผู้เล่นในทีม: {players.length} · Balance: {team?.balance ?? '-'}M
+      </p>
       {error && <p role="alert">{error}</p>}
       <ul>
         {players.map((player) => (
           <li key={player.id}>
-            {player.name} ({player.position}, อายุ {player.age})
-            {canRelease && (
-              <button type="button" onClick={() => handleRelease(player.id)}>
-                ฉีกสัญญา
+            {player.name} ({player.position}, อายุ {player.age}, Tag: {player.tag} — ย่อยได้{' '}
+            {TAG_VALUE[player.tag]}M)
+            {canManageSquad && (
+              <button type="button" onClick={() => handleSellOff(player.id)}>
+                ย่อยนักเตะ
               </button>
             )}
             {role === 'admin' && (
@@ -140,71 +170,63 @@ export default function TeamSquadPage() {
                 ลบ (แก้ข้อมูลผิด)
               </button>
             )}
-            {canRelease && otherTeams.length > 0 && (
-              <ProposeSaleForm
-                teams={otherTeams}
-                onSubmit={(toTeamId, price) => handleProposeSale(player, toTeamId, price)}
+            {canManageSquad && (
+              <ListForAuctionForm
+                otherTeams={otherTeams}
+                onSubmit={(startingPrice, guaranteedBuyerTeamId) =>
+                  handleListForAuction(player, startingPrice, guaranteedBuyerTeamId)
+                }
               />
             )}
-            {canRelease && (
-              <ListForAuctionForm
-                onSubmit={(startingPrice) => handleListForAuction(player, startingPrice)}
+            {canRequestTearAsOwnTeam && myTeam && (
+              <button type="button" onClick={() => handleTear(player, myTeam.id)}>
+                ฉีกสัญญาดึงตัวไปทีมของฉัน (80M)
+              </button>
+            )}
+            {canRequestTearAsAdmin && !canRequestTearAsOwnTeam && (
+              <TearAsAdminForm
+                teams={otherTeams}
+                onSubmit={(requesterTeamId) => handleTear(player, requesterTeamId)}
               />
             )}
           </li>
         ))}
       </ul>
       {role === 'admin' && <AddPlayerForm onSubmit={handleAdd} />}
+      {role === 'admin' && <AdjustBalanceForm onSubmit={handleAdjustBalance} />}
+      {canManageSquad && transactions.length > 0 && (
+        <>
+          <h2>ประวัติธุรกรรม</h2>
+          <ul>
+            {transactions.map((t) => (
+              <li key={t.id}>
+                ฤดูกาล {t.season} — {t.category} — {t.desc} —{' '}
+                {t.type === 'income' ? '+' : '-'}
+                {t.amount}M
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
     </main>
   )
 }
 
-function ProposeSaleForm({
-  teams,
+function ListForAuctionForm({
+  otherTeams,
   onSubmit,
 }: {
-  teams: Team[]
-  onSubmit: (toTeamId: string, price: number) => void
+  otherTeams: Team[]
+  onSubmit: (startingPrice: number, guaranteedBuyerTeamId?: string) => void
 }) {
-  const [toTeamId, setToTeamId] = useState(teams[0]?.id ?? '')
-  const [price, setPrice] = useState('')
-
-  function handleSubmit(e: FormEvent) {
-    e.preventDefault()
-    onSubmit(toTeamId, Number(price))
-    setPrice('')
-  }
-
-  return (
-    <form onSubmit={handleSubmit} style={{ display: 'inline' }}>
-      <select value={toTeamId} onChange={(e) => setToTeamId(e.target.value)}>
-        {teams.map((t) => (
-          <option key={t.id} value={t.id}>
-            {t.name}
-          </option>
-        ))}
-      </select>
-      <input
-        type="number"
-        min={0}
-        placeholder="ราคา"
-        value={price}
-        onChange={(e) => setPrice(e.target.value)}
-        required
-        style={{ width: '5em' }}
-      />
-      <button type="submit">เสนอขาย</button>
-    </form>
-  )
-}
-
-function ListForAuctionForm({ onSubmit }: { onSubmit: (startingPrice: number) => void }) {
   const [startingPrice, setStartingPrice] = useState('')
+  const [guaranteedBuyerTeamId, setGuaranteedBuyerTeamId] = useState('')
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault()
-    onSubmit(Number(startingPrice))
+    onSubmit(Number(startingPrice), guaranteedBuyerTeamId || undefined)
     setStartingPrice('')
+    setGuaranteedBuyerTeamId('')
   }
 
   return (
@@ -218,7 +240,47 @@ function ListForAuctionForm({ onSubmit }: { onSubmit: (startingPrice: number) =>
         required
         style={{ width: '7em' }}
       />
+      <select
+        value={guaranteedBuyerTeamId}
+        onChange={(e) => setGuaranteedBuyerTeamId(e.target.value)}
+      >
+        <option value="">ไม่มีการันตี</option>
+        {otherTeams.map((t) => (
+          <option key={t.id} value={t.id}>
+            การันตีโดย {t.name}
+          </option>
+        ))}
+      </select>
       <button type="submit">ส่งเข้าประมูล</button>
+    </form>
+  )
+}
+
+function TearAsAdminForm({
+  teams,
+  onSubmit,
+}: {
+  teams: Team[]
+  onSubmit: (requesterTeamId: string) => void
+}) {
+  const [requesterTeamId, setRequesterTeamId] = useState(teams[0]?.id ?? '')
+
+  function handleSubmit(e: FormEvent) {
+    e.preventDefault()
+    if (!requesterTeamId) return
+    onSubmit(requesterTeamId)
+  }
+
+  return (
+    <form onSubmit={handleSubmit} style={{ display: 'inline' }}>
+      <select value={requesterTeamId} onChange={(e) => setRequesterTeamId(e.target.value)}>
+        {teams.map((t) => (
+          <option key={t.id} value={t.id}>
+            {t.name}
+          </option>
+        ))}
+      </select>
+      <button type="submit">ยื่นฉีกสัญญาแทนทีมนี้</button>
     </form>
   )
 }
@@ -226,15 +288,16 @@ function ListForAuctionForm({ onSubmit }: { onSubmit: (startingPrice: number) =>
 function AddPlayerForm({
   onSubmit,
 }: {
-  onSubmit: (input: { name: string; position: PlayerPosition; age: number }) => void
+  onSubmit: (input: { name: string; position: PlayerPosition; age: number; tag: PlayerTag }) => void
 }) {
   const [name, setName] = useState('')
   const [position, setPosition] = useState<PlayerPosition>('MF')
   const [age, setAge] = useState('')
+  const [tag, setTag] = useState<PlayerTag>('Free')
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault()
-    onSubmit({ name, position, age: Number(age) })
+    onSubmit({ name, position, age: Number(age), tag })
     setName('')
     setAge('')
   }
@@ -262,7 +325,46 @@ function AddPlayerForm({
         onChange={(e) => setAge(e.target.value)}
         required
       />
+      <select value={tag} onChange={(e) => setTag(e.target.value as PlayerTag)}>
+        {TAGS.map((t) => (
+          <option key={t} value={t}>
+            {t}
+          </option>
+        ))}
+      </select>
       <button type="submit">เพิ่มผู้เล่น</button>
+    </form>
+  )
+}
+
+function AdjustBalanceForm({ onSubmit }: { onSubmit: (delta: number, desc: string) => void }) {
+  const [delta, setDelta] = useState('')
+  const [desc, setDesc] = useState('')
+
+  function handleSubmit(e: FormEvent) {
+    e.preventDefault()
+    onSubmit(Number(delta), desc)
+    setDelta('')
+    setDesc('')
+  }
+
+  return (
+    <form onSubmit={handleSubmit}>
+      <input
+        type="number"
+        placeholder="ปรับ balance (+/-)"
+        value={delta}
+        onChange={(e) => setDelta(e.target.value)}
+        required
+        style={{ width: '9em' }}
+      />
+      <input
+        placeholder="เหตุผล"
+        value={desc}
+        onChange={(e) => setDesc(e.target.value)}
+        required
+      />
+      <button type="submit">ปรับ Balance</button>
     </form>
   )
 }

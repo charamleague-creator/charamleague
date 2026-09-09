@@ -3,31 +3,21 @@ import { Link, useParams } from 'react-router-dom'
 import {
   approveAuctionListing,
   closeAuction,
-  completeSale,
   createTeam,
   endSeason,
   placeBid,
   rejectAuctionListing,
   reportMatchResult,
-  respondToSaleOffer,
   setTeamForfeited,
   startNewSeason,
   subscribeAuctionListings,
-  subscribeFreeAgents,
   subscribeLeague,
-  subscribeSaleOffers,
   subscribeSeasonMatches,
   subscribeTeams,
+  subscribeTearRequests,
 } from '@/features/leagues/api'
 import { computeStandings } from '@/features/leagues/standings'
-import type {
-  AuctionListing,
-  FreeAgent,
-  League,
-  Match,
-  SaleOffer,
-  Team,
-} from '@/features/leagues/types'
+import type { AuctionListing, League, Match, Team, TearRequest } from '@/features/leagues/types'
 import { createCup, subscribeCups } from '@/features/cups/api'
 import type { Cup, CupType } from '@/features/cups/types'
 import { useAuth } from '@/hooks/useAuth'
@@ -38,9 +28,8 @@ export default function LeagueDetailPage() {
   const [league, setLeague] = useState<League | null>(null)
   const [teams, setTeams] = useState<Team[]>([])
   const [matches, setMatches] = useState<Match[]>([])
-  const [freeAgents, setFreeAgents] = useState<FreeAgent[]>([])
-  const [saleOffers, setSaleOffers] = useState<SaleOffer[]>([])
   const [auctionListings, setAuctionListings] = useState<AuctionListing[]>([])
+  const [tearRequests, setTearRequests] = useState<TearRequest[]>([])
   const [cups, setCups] = useState<Cup[]>([])
   const [error, setError] = useState<string | null>(null)
 
@@ -61,22 +50,17 @@ export default function LeagueDetailPage() {
 
   useEffect(() => {
     if (!leagueId) return
-    return subscribeFreeAgents(leagueId, setFreeAgents)
-  }, [leagueId])
-
-  useEffect(() => {
-    if (!leagueId) return
-    return subscribeSaleOffers(leagueId, setSaleOffers)
-  }, [leagueId])
-
-  useEffect(() => {
-    if (!leagueId) return
     return subscribeCups(leagueId, setCups)
   }, [leagueId])
 
   useEffect(() => {
     if (!leagueId) return
     return subscribeAuctionListings(leagueId, setAuctionListings)
+  }, [leagueId])
+
+  useEffect(() => {
+    if (!leagueId) return
+    return subscribeTearRequests(leagueId, setTearRequests)
   }, [leagueId])
 
   if (!leagueId || !league) return <main style={{ margin: '2rem' }}>กำลังโหลด...</main>
@@ -171,59 +155,17 @@ export default function LeagueDetailPage() {
         ))}
       </ul>
 
-      <h2>ผู้เล่นอิสระ (ฉีกสัญญาแล้ว รอทีมใหม่รับเข้า)</h2>
+      <h2>คำขอฉีกสัญญา (คิวรอ เปิดเผยผลตอนจบฤดูกาล)</h2>
       <ul>
-        {freeAgents.length === 0 && <li>ไม่มีผู้เล่นอิสระ</li>}
-        {freeAgents.map((agent) => (
-          <li key={agent.id}>
-            {agent.name} ({agent.position}, อายุ {agent.age}) — ปล่อยจาก {agent.releasedFromTeamName}{' '}
-            (ฤดูกาล {agent.releasedSeason})
-          </li>
-        ))}
-      </ul>
-
-      <h2>ข้อเสนอซื้อขาย</h2>
-      <ul>
-        {saleOffers.length === 0 && <li>ไม่มีข้อเสนอ</li>}
-        {saleOffers.map((offer) => {
-          const involved =
-            !!user &&
-            (teamsById.get(offer.fromTeamId)?.managerUid === user.uid ||
-              teamsById.get(offer.toTeamId)?.managerUid === user.uid)
-          return (
-            <li key={offer.id}>
-              {offer.fromTeamName} เสนอขาย {offer.playerName} ({offer.playerPosition}) ให้{' '}
-              {offer.toTeamName} ที่ราคา {offer.price} — สถานะ: {offer.status}
-              {offer.status === 'pending' && (role === 'admin' || involved) && (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => run(() => respondToSaleOffer(leagueId, offer.id, 'accepted'))}
-                  >
-                    ยอมรับ
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => run(() => respondToSaleOffer(leagueId, offer.id, 'rejected'))}
-                  >
-                    ปฏิเสธ
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => run(() => respondToSaleOffer(leagueId, offer.id, 'cancelled'))}
-                  >
-                    ยกเลิก
-                  </button>
-                </>
-              )}
-              {offer.status === 'accepted' && role === 'admin' && (
-                <button type="button" onClick={() => run(() => completeSale(leagueId, offer.id))}>
-                  ปิดการขาย (ย้ายผู้เล่นจริง)
-                </button>
-              )}
+        {tearRequests.length === 0 && <li>ไม่มีคำขอ</li>}
+        {tearRequests
+          .filter((t) => t.season === league.currentSeason)
+          .map((t) => (
+            <li key={t.id}>
+              {t.requesterTeamName} ยื่นฉีกสัญญาดึง {t.playerName} จาก {t.targetTeamName} — สถานะ:{' '}
+              {t.status}
             </li>
-          )
-        })}
+          ))}
       </ul>
 
       <h2>ประมูล</h2>
@@ -299,7 +241,7 @@ export default function LeagueDetailPage() {
           <ul>
             {teams.map((team) => (
               <li key={team.id}>
-                {team.name} (ผู้จัดการทีม: {team.managerName}){' '}
+                {team.name} (ผู้จัดการทีม: {team.managerName}, Balance: {team.balance}M){' '}
                 <label>
                   <input
                     type="checkbox"
@@ -438,18 +380,25 @@ function BidForm({
 function AddTeamForm({
   onSubmit,
 }: {
-  onSubmit: (input: { name: string; managerUid: string; managerName: string }) => void
+  onSubmit: (input: {
+    name: string
+    managerUid: string
+    managerName: string
+    balance: number
+  }) => void
 }) {
   const [name, setName] = useState('')
   const [managerUid, setManagerUid] = useState('')
   const [managerName, setManagerName] = useState('')
+  const [balance, setBalance] = useState('')
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault()
-    onSubmit({ name, managerUid, managerName })
+    onSubmit({ name, managerUid, managerName, balance: Number(balance) })
     setName('')
     setManagerUid('')
     setManagerName('')
+    setBalance('')
   }
 
   return (
@@ -466,6 +415,14 @@ function AddTeamForm({
         value={managerName}
         onChange={(e) => setManagerName(e.target.value)}
         required
+      />
+      <input
+        type="number"
+        placeholder="Balance เริ่มต้น (M)"
+        value={balance}
+        onChange={(e) => setBalance(e.target.value)}
+        required
+        style={{ width: '9em' }}
       />
       <button type="submit">เพิ่มทีม</button>
     </form>

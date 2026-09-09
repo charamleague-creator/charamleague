@@ -34,52 +34,42 @@ service cloud.firestore {
 
       match /teams/{teamId} {
         allow read: if true;
-        allow write: if isAdmin();
+        // Finance: ย่อยนักเตะ (sellOffPlayer) เป็น self-service ของทีมเจ้าของเอง เพิ่ม balance
+        // ให้ตัวเองได้เท่านั้น (field เดียว ทิศทางเดียว) เหมือน guideline เดิมที่ให้ทีมทำ
+        // same-team action เองได้ — เงินลด/ลบ/field อื่นๆ ยังเป็นสิทธิ์ admin เท่านั้นเสมอ
+        allow update: if isAdmin() || (
+          managesTeam(database, leagueId, teamId) &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['balance']) &&
+          request.resource.data.balance > resource.data.balance
+        );
+        allow create, delete: if isAdmin();
 
-        // Phase 2.1: squad foundation. Phase 2.2: manager ตัวเองฉีกสัญญา (ลบ) ผู้เล่นออกจากทีมได้เอง
-        // เพิ่ม/แก้ข้อมูลผู้เล่นยังเป็นสิทธิ์ admin เท่านั้น (ยังไม่มีระบบซื้อเข้าเองในทีม)
+        // Phase 2.1: squad foundation. เพิ่ม/แก้ข้อมูลผู้เล่นยังเป็นสิทธิ์ admin เท่านั้น
+        // ลบผู้เล่น (ย่อยนักเตะ/ฉีกสัญญาตอนจบฤดูกาล) ทีมเจ้าของทำเองได้เหมือนเดิม
         match /players/{playerId} {
           allow read: if true;
           allow create, update: if isAdmin();
           allow delete: if isAdmin() || managesTeam(database, leagueId, teamId);
         }
+
+        // Finance: ledger ธุรกรรมของทีม (ย่อยนักเตะ/ภาษีประมูล/ฉีกสัญญา/ปรับมือ) — immutable
+        // สร้างได้เฉพาะ admin หรือทีมเจ้าของเอง (คู่กับการอัพเดต balance ข้างบน) ห้ามแก้/ลบ
+        match /transactions/{txId} {
+          allow read: if true;
+          allow create: if isAdmin() || managesTeam(database, leagueId, teamId);
+          allow update, delete: if false;
+        }
       }
 
-      // Phase 2.2: ผู้เล่นอิสระหลังฉีกสัญญา — สร้างได้เฉพาะทีมที่ปล่อยผู้เล่นออกจริง (เช็คว่า
-      // ผู้เขียนคุมทีมที่ตรงกับ releasedFromTeamId ใน field ที่กำลังเขียน) ห้ามแก้/ลบตรงๆ
-      // (การ "รับเข้าทีม" ใน sub-phase ถัดไปจะทำผ่านฟังก์ชันเฉพาะ ไม่ใช่แก้ doc นี้ตรงๆ)
-      match /freeAgents/{playerId} {
+      // Finance: คำขอฉีกสัญญา — คิวรอ ยื่นได้ทุกทีมที่ signed in (admin ก็ยื่นแทนได้)
+      // ประมวลผล (เปลี่ยน status) ทำได้เฉพาะ admin ตอนจบฤดูกาลเท่านั้น (เขียนข้ามหลายทีมพร้อมกัน)
+      match /tearRequests/{requestId} {
         allow read: if true;
-        allow create: if isAdmin() ||
-          managesTeam(database, leagueId, request.resource.data.releasedFromTeamId);
+        allow create: if isSignedIn();
         allow update, delete: if isAdmin();
       }
 
-      // Phase 2.2: log การฉีกสัญญา ใช้กัน ping-pong (guideline #4/#6) — เขียนได้ครั้งเดียว ห้ามแก้/ลบ
-      match /releaseLog/{logId} {
-        allow read: if true;
-        allow create: if isAdmin() ||
-          managesTeam(database, leagueId, request.resource.data.fromTeamId);
-        allow update, delete: if false;
-      }
-
-      // Phase 2.3: ขายตรงระหว่างทีม — เสนอราคาได้ทั้งผู้ขาย/ผู้ซื้อ (ทีมใดทีมหนึ่งที่เกี่ยวข้อง)
-      // อีกฝ่ายเปลี่ยนได้แค่ field status (ยอมรับ/ปฏิเสธ/ยกเลิก) ห้ามพ่วงแก้ field อื่น
-      // การย้ายผู้เล่นจริง (ข้ามสิทธิ์ 2 ทีม) ให้ผ่าน completeSale ที่ admin เท่านั้นเป็นคนกด
-      match /saleOffers/{offerId} {
-        allow read: if true;
-        allow create: if isAdmin() ||
-          managesTeam(database, leagueId, request.resource.data.fromTeamId) ||
-          managesTeam(database, leagueId, request.resource.data.toTeamId);
-        allow update: if isAdmin() || (
-          (managesTeam(database, leagueId, resource.data.fromTeamId) ||
-           managesTeam(database, leagueId, resource.data.toTeamId)) &&
-          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status'])
-        );
-        allow delete: if isAdmin();
-      }
-
-      // Phase 2.3: ประวัติการโอนที่สำเร็จแล้ว (ขายย่อย+ประมูลในอนาคต) ใช้คำนวณโควตาสด
+      // ประวัติการโอนที่สำเร็จแล้ว (ผ่านประมูลเท่านั้น) ใช้คำนวณโควตาสด
       // เขียนได้เฉพาะ admin เพราะเกิดจาก completeSale เท่านั้น ห้ามแก้/ลบ (immutable event log)
       match /transfers/{transferId} {
         allow read: if true;

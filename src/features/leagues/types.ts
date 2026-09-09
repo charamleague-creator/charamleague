@@ -13,6 +13,7 @@ export interface Team {
   managerUid: string
   managerName: string
   isForfeited: boolean
+  balance: number
 }
 
 export type MatchStatus = 'scheduled' | 'played' | 'bye'
@@ -32,44 +33,18 @@ export interface Match {
 
 export type PlayerPosition = 'GK' | 'DF' | 'MF' | 'FW'
 
+export type PlayerTag = 'Academy' | 'Academy72' | 'Worldcup' | 'นักเตะ65' | 'Free'
+
 export interface Player {
   id: string
   name: string
   position: PlayerPosition
   age: number
   joinedSeason: number
+  tag: PlayerTag
 }
 
-export interface FreeAgent {
-  id: string
-  name: string
-  position: PlayerPosition
-  age: number
-  joinedSeason: number
-  releasedFromTeamId: string
-  releasedFromTeamName: string
-  releasedSeason: number
-}
-
-export type SaleOfferStatus = 'pending' | 'accepted' | 'rejected' | 'cancelled' | 'completed'
-
-export interface SaleOffer {
-  id: string
-  season: number
-  fromTeamId: string
-  fromTeamName: string
-  toTeamId: string
-  toTeamName: string
-  playerId: string
-  playerName: string
-  playerPosition: PlayerPosition
-  playerAge: number
-  price: number
-  status: SaleOfferStatus
-  proposedBy: 'seller' | 'buyer'
-}
-
-export type TransferType = 'simple_sale' | 'auction'
+export type TransferType = 'auction'
 
 export interface Transfer {
   id: string
@@ -103,6 +78,32 @@ export interface AuctionListing {
   highestBid: number | null
   highestBidderTeamId: string | null
   highestBidderTeamName: string | null
+}
+
+export type TransactionType = 'income' | 'expense'
+
+export interface Transaction {
+  id: string
+  type: TransactionType
+  category: string
+  desc: string
+  amount: number
+  season: number
+}
+
+export type TearRequestStatus = 'pending' | 'success' | 'failed_insufficient_funds' | 'failed_outbid'
+
+export interface TearRequest {
+  id: string
+  season: number
+  requesterTeamId: string
+  requesterTeamName: string
+  targetTeamId: string
+  targetTeamName: string
+  playerId: string
+  playerName: string
+  status: TearRequestStatus
+  requestedAtMs: number | null
 }
 
 export interface StandingsRow {

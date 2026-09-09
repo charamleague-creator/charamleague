@@ -1,0 +1,123 @@
+import type { PlayerTag } from './types'
+
+/**
+ * ราคาย่อยนักเตะตาม Tag (หน่วย M) — ตายตัวตามเอกสารการเงิน ส่วนโบนัส Tag "40" (veteran)
+ * ยังไม่ทำเพราะสูตรคำนวณเพิ่มไม่มีระบุในเอกสาร (ดู OVERNIGHT-NOTES.md)
+ */
+export const TAG_VALUE: Record<PlayerTag, number> = {
+  Academy: 2,
+  Academy72: 10,
+  Worldcup: 7,
+  นักเตะ65: 1,
+  Free: 1,
+}
+
+export const AUCTION_TAX_RATE = 0.3
+
+/** ผู้ขายได้รับ = finalPrice x 0.7 (หักภาษี 30%) ปัดทศนิยม 2 ตำแหน่งกันปัญหา floating point */
+export function auctionSellerProceeds(finalPrice: number): number {
+  return Math.round(finalPrice * (1 - AUCTION_TAX_RATE) * 100) / 100
+}
+
+export const TEAR_BUYER_COST = 80
+export const TEAR_ORIGIN_COMPENSATION = 40
+
+export interface TearResolutionInput {
+  id: string
+  playerId: string
+  requesterTeamId: string
+  targetTeamId: string
+  requestedAtMs: number
+}
+
+export type TearResolutionStatus = 'success' | 'failed_insufficient_funds' | 'failed_outbid'
+
+export interface TearResolutionResult {
+  id: string
+  playerId: string
+  requesterTeamId: string
+  targetTeamId: string
+  status: TearResolutionStatus
+}
+
+/**
+ * กันปิงปอง: ห้ามฉีกสัญญาคืนผู้เล่นคนที่ "เพิ่งถูกฉีกไปจากทีมเดียวกัน" ในฤดูกาลก่อนหน้า
+ * ระบุเป็นคีย์ `${playerId}:${requesterTeamId}:${targetTeamId}` ของทิศทางที่ถูกบล็อก
+ * (คำนวณจากประวัติฉีกสัญญาที่สำเร็จล่าสุดของผู้เล่นแต่ละคน — หน้าที่ผู้เรียก ไม่ใช่ของฟังก์ชันนี้)
+ */
+export function blockedTearPairKey(playerId: string, requesterTeamId: string, targetTeamId: string): string {
+  return `${playerId}:${requesterTeamId}:${targetTeamId}`
+}
+
+/**
+ * ประมวลผลคำขอฉีกสัญญาทั้งหมดของฤดูกาล ตอนจบฤดูกาล (เอกสารข้อ 4 — "เปิดเผยพร้อมกันตอนจบฤดูกาล")
+ * ต่อผู้เล่น 1 คน: เรียงตามเวลายื่นคำขอ คนแรกที่มีเงินพอ (>= 80) และไม่ถูกกันปิงปอง ชนะ คนที่เหลือแพ้
+ * ได้ failed_outbid เพราะมีคนได้ไปแล้ว — เช็คเงินแบบสะสม (ทีมเดียวยื่นฉีกหลายคนพร้อมกัน เงินต้องพอทุกอันที่จะสำเร็จ)
+ */
+export function resolveTearRequests(
+  requests: TearResolutionInput[],
+  getBalance: (teamId: string) => number,
+  blockedPairs: ReadonlySet<string> = new Set(),
+): TearResolutionResult[] {
+  const byPlayer = new Map<string, TearResolutionInput[]>()
+  for (const req of requests) {
+    const list = byPlayer.get(req.playerId) ?? []
+    list.push(req)
+    byPlayer.set(req.playerId, list)
+  }
+
+  const results: TearResolutionResult[] = []
+  const pendingDelta = new Map<string, number>()
+
+  for (const group of byPlayer.values()) {
+    const sorted = [...group].sort((a, b) => a.requestedAtMs - b.requestedAtMs)
+    let claimed = false
+    for (const req of sorted) {
+      if (claimed) {
+        results.push({
+          id: req.id,
+          playerId: req.playerId,
+          requesterTeamId: req.requesterTeamId,
+          targetTeamId: req.targetTeamId,
+          status: 'failed_outbid',
+        })
+        continue
+      }
+
+      if (blockedPairs.has(blockedTearPairKey(req.playerId, req.requesterTeamId, req.targetTeamId))) {
+        results.push({
+          id: req.id,
+          playerId: req.playerId,
+          requesterTeamId: req.requesterTeamId,
+          targetTeamId: req.targetTeamId,
+          status: 'failed_outbid',
+        })
+        continue
+      }
+
+      const currentBalance = getBalance(req.requesterTeamId) + (pendingDelta.get(req.requesterTeamId) ?? 0)
+      if (currentBalance < TEAR_BUYER_COST) {
+        results.push({
+          id: req.id,
+          playerId: req.playerId,
+          requesterTeamId: req.requesterTeamId,
+          targetTeamId: req.targetTeamId,
+          status: 'failed_insufficient_funds',
+        })
+        continue
+      }
+
+      pendingDelta.set(req.requesterTeamId, (pendingDelta.get(req.requesterTeamId) ?? 0) - TEAR_BUYER_COST)
+      pendingDelta.set(req.targetTeamId, (pendingDelta.get(req.targetTeamId) ?? 0) + TEAR_ORIGIN_COMPENSATION)
+      results.push({
+        id: req.id,
+        playerId: req.playerId,
+        requesterTeamId: req.requesterTeamId,
+        targetTeamId: req.targetTeamId,
+        status: 'success',
+      })
+      claimed = true
+    }
+  }
+  return results
+}
