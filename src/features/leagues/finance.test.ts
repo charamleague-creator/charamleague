@@ -3,6 +3,7 @@ import {
   auctionSellerProceeds,
   blockedTearPairKey,
   resolveTearRequests,
+  sellOffPayout,
   type TearResolutionInput,
 } from './finance'
 
@@ -20,6 +21,17 @@ function req(overrides: Partial<TearResolutionInput>): TearResolutionInput {
 describe('auctionSellerProceeds', () => {
   it('หักภาษี 30% เหลือ 70% ให้ผู้ขาย', () => {
     expect(auctionSellerProceeds(100)).toBe(70)
+  })
+})
+
+describe('sellOffPayout', () => {
+  it('ใช้ราคาตาม Tag เฉยๆถ้าไม่มี tag พิเศษ veteran', () => {
+    expect(sellOffPayout('Academy72', false)).toBe(10)
+  })
+
+  it('บวกเพิ่ม 2M ถ้ามี tag พิเศษ veteran', () => {
+    expect(sellOffPayout('Academy72', true)).toBe(12)
+    expect(sellOffPayout('Free', true)).toBe(3)
   })
 })
 

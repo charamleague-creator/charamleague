@@ -1,15 +1,23 @@
 import type { PlayerTag } from './types'
 
-/**
- * ราคาย่อยนักเตะตาม Tag (หน่วย M) — ตายตัวตามเอกสารการเงิน ส่วนโบนัส Tag "40" (veteran)
- * ยังไม่ทำเพราะสูตรคำนวณเพิ่มไม่มีระบุในเอกสาร (ดู OVERNIGHT-NOTES.md)
- */
+/** ราคาย่อยนักเตะตาม Tag (หน่วย M) — ตายตัวตามเอกสารการเงิน */
 export const TAG_VALUE: Record<PlayerTag, number> = {
   Academy: 2,
   Academy72: 10,
   Worldcup: 7,
   นักเตะ65: 1,
   Free: 1,
+}
+
+/**
+ * Tag พิเศษ "veteran" (แจกโดยแอดมินเลือกเอง แยกจาก Tag หลัก 5 อัน) — ตอนย่อยนักเตะ
+ * ได้เงินเพิ่ม 2M ต่อจาก TAG_VALUE เดิม (เรื่องอายุ/เลิกเล่นอัตโนมัติที่ tag นี้เกี่ยวข้องด้วย
+ * ยังไม่ทำ เพราะระบบอายุเปลี่ยนตามฤดูกาลยังไม่มี — รอคุยแยกทีหลัง)
+ */
+export const VETERAN_TAG_BONUS = 2
+
+export function sellOffPayout(tag: PlayerTag, isVeteran: boolean): number {
+  return TAG_VALUE[tag] + (isVeteran ? VETERAN_TAG_BONUS : 0)
 }
 
 export const AUCTION_TAX_RATE = 0.3

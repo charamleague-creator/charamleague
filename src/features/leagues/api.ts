@@ -18,12 +18,12 @@ import { buildCurrentAdminLogWrite } from '@/features/adminLog/api'
 import { db } from '@/lib/firebase'
 import { generateRoundRobin } from './fixtures'
 import {
-  TAG_VALUE,
   TEAR_BUYER_COST,
   TEAR_ORIGIN_COMPENSATION,
   auctionSellerProceeds,
   blockedTearPairKey,
   resolveTearRequests,
+  sellOffPayout,
 } from './finance'
 import { canReceive, canSell } from './quotas'
 import type {
@@ -110,6 +110,7 @@ function toPlayer(snap: QueryDocumentSnapshot<DocumentData>): Player {
     age: data.age,
     joinedSeason: data.joinedSeason,
     tag: data.tag,
+    isVeteran: data.isVeteran ?? false,
   }
 }
 
@@ -132,7 +133,23 @@ export async function addPlayer(
     tag: Player['tag']
   },
 ): Promise<void> {
-  await addDoc(playersCol(leagueId, teamId), input)
+  await addDoc(playersCol(leagueId, teamId), { ...input, isVeteran: false })
+}
+
+/** แอดมินเลือกแจก/เอา tag พิเศษ "veteran" ให้ผู้เล่นเอง (สุ่มเลือกเองนอกระบบ ไม่มี auto) */
+export async function setPlayerVeteranTag(
+  leagueId: string,
+  teamId: string,
+  playerId: string,
+  isVeteran: boolean,
+): Promise<void> {
+  await commitInChunks([
+    (batch) =>
+      batch.update(doc(db, 'leagues', leagueId, 'teams', teamId, 'players', playerId), {
+        isVeteran,
+      }),
+    buildCurrentAdminLogWrite('set_player_veteran_tag', { leagueId, teamId, playerId, isVeteran }),
+  ])
 }
 
 export async function removePlayer(
@@ -184,7 +201,7 @@ export async function sellOffPlayer(leagueId: string, teamId: string, playerId: 
   const player = toPlayer(playerSnap as QueryDocumentSnapshot<DocumentData>)
   const team = toTeam(teamSnap as QueryDocumentSnapshot<DocumentData>)
 
-  const payout = TAG_VALUE[player.tag]
+  const payout = sellOffPayout(player.tag, player.isVeteran)
 
   await commitInChunks([
     (batch) => batch.delete(doc(db, 'leagues', leagueId, 'teams', teamId, 'players', playerId)),
@@ -196,7 +213,7 @@ export async function sellOffPlayer(leagueId: string, teamId: string, playerId: 
       batch.set(doc(transactionsCol(leagueId, teamId)), {
         type: 'income',
         category: 'sell_off',
-        desc: `ย่อยนักเตะ ${player.name} (Tag: ${player.tag})`,
+        desc: `ย่อยนักเตะ ${player.name} (Tag: ${player.tag}${player.isVeteran ? ' + veteran' : ''})`,
         amount: payout,
         season: league.currentSeason,
       }),
@@ -439,6 +456,7 @@ export async function closeAuction(leagueId: string, listingId: string): Promise
         age: player.age,
         joinedSeason: player.joinedSeason,
         tag: player.tag,
+        isVeteran: player.isVeteran,
       }),
     (batch) =>
       batch.set(doc(transfersCol(leagueId)), {
@@ -748,6 +766,7 @@ async function resolveTearRequestsForSeason(leagueId: string, season: number) {
         age: player.age,
         joinedSeason: player.joinedSeason,
         tag: player.tag,
+        isVeteran: player.isVeteran,
       }),
     )
     writes.push((batch) =>

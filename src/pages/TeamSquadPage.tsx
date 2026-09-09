@@ -7,12 +7,13 @@ import {
   createTearRequest,
   removePlayer,
   sellOffPlayer,
+  setPlayerVeteranTag,
   subscribeLeague,
   subscribePlayers,
   subscribeTeams,
   subscribeTransactions,
 } from '@/features/leagues/api'
-import { TAG_VALUE } from '@/features/leagues/finance'
+import { sellOffPayout } from '@/features/leagues/finance'
 import type { League, Player, PlayerPosition, PlayerTag, Team, Transaction } from '@/features/leagues/types'
 import { useAuth } from '@/hooks/useAuth'
 
@@ -89,6 +90,15 @@ export default function TeamSquadPage() {
     }
   }
 
+  async function handleToggleVeteran(playerId: string, isVeteran: boolean) {
+    setError(null)
+    try {
+      await setPlayerVeteranTag(currentLeagueId, currentTeamId, playerId, isVeteran)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
   const isOwnManager = !!user && !!team && user.uid === team.managerUid
   const canManageSquad = role === 'admin' || isOwnManager
   const otherTeams = teams.filter((t) => t.id !== teamId)
@@ -158,8 +168,8 @@ export default function TeamSquadPage() {
       <ul>
         {players.map((player) => (
           <li key={player.id}>
-            {player.name} ({player.position}, อายุ {player.age}, Tag: {player.tag} — ย่อยได้{' '}
-            {TAG_VALUE[player.tag]}M)
+            {player.name} ({player.position}, อายุ {player.age}, Tag: {player.tag}
+            {player.isVeteran && ' + veteran'} — ย่อยได้ {sellOffPayout(player.tag, player.isVeteran)}M)
             {canManageSquad && (
               <button type="button" onClick={() => handleSellOff(player.id)}>
                 ย่อยนักเตะ
@@ -168,6 +178,14 @@ export default function TeamSquadPage() {
             {role === 'admin' && (
               <button type="button" onClick={() => handleRemove(player.id)}>
                 ลบ (แก้ข้อมูลผิด)
+              </button>
+            )}
+            {role === 'admin' && (
+              <button
+                type="button"
+                onClick={() => handleToggleVeteran(player.id, !player.isVeteran)}
+              >
+                {player.isVeteran ? 'เอา Tag พิเศษ (veteran) ออก' : 'ให้ Tag พิเศษ (veteran)'}
               </button>
             )}
             {canManageSquad && (

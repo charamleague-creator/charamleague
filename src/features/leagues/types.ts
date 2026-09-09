@@ -42,6 +42,7 @@ export interface Player {
   age: number
   joinedSeason: number
   tag: PlayerTag
+  isVeteran: boolean
 }
 
 export type TransferType = 'auction'
