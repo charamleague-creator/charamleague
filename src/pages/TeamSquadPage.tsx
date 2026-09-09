@@ -9,14 +9,26 @@ import {
   removePlayer,
   sellOffPlayer,
   setPlayerVeteranTag,
+  subscribeAuctionListings,
   subscribeLeague,
   subscribePlayers,
+  subscribeSeasonTransfers,
   subscribeTeams,
   subscribeTransactions,
   submitLineup,
 } from '@/features/leagues/api'
 import { sellOffPayout } from '@/features/leagues/finance'
-import type { League, Player, PlayerPosition, PlayerTag, Team, Transaction } from '@/features/leagues/types'
+import { canReceive, canSell, countReceived, countSoldTotal, countSoldViaAuction } from '@/features/leagues/quotas'
+import type {
+  AuctionListing,
+  League,
+  Player,
+  PlayerPosition,
+  PlayerTag,
+  Team,
+  Transaction,
+  Transfer,
+} from '@/features/leagues/types'
 import { useAuth } from '@/hooks/useAuth'
 
 const POSITIONS: PlayerPosition[] = ['GK', 'DF', 'MF', 'FW']
@@ -261,6 +273,9 @@ export default function TeamSquadPage() {
           </ul>
         </>
       )}
+      {role === 'admin' && league && (
+        <QuotaInspector leagueId={currentLeagueId} teamId={currentTeamId} league={league} />
+      )}
     </main>
   )
 }
@@ -419,5 +434,81 @@ function AdjustBalanceForm({ onSubmit }: { onSubmit: (delta: number, desc: strin
       />
       <button type="submit">ปรับ Balance</button>
     </form>
+  )
+}
+
+/**
+ * เอกสาร phase 07 ข้อ 4: เครื่องมือดูรายละเอียดโควตาเจาะลึก — โชว์ทุกรายการที่เกี่ยวข้องกับทีมนี้
+ * ในฤดูกาลปัจจุบัน ไม่ว่าสถานะไหน (transfer ที่สำเร็จแล้ว + auction listing ทุกสถานะ) พร้อมผลลัพธ์
+ * canSell/canReceive ที่คำนวณจากรายการเดียวกันนี้เป๊ะๆ — มีประโยชน์ตอนตัวเลขที่โชว์ไม่ตรงกับที่คาด
+ */
+function QuotaInspector({
+  leagueId,
+  teamId,
+  league,
+}: {
+  leagueId: string
+  teamId: string
+  league: League
+}) {
+  const [transfers, setTransfers] = useState<Transfer[]>([])
+  const [allListings, setAllListings] = useState<AuctionListing[]>([])
+
+  useEffect(() => {
+    return subscribeSeasonTransfers(leagueId, league.currentSeason, setTransfers)
+  }, [leagueId, league.currentSeason])
+
+  useEffect(() => {
+    return subscribeAuctionListings(leagueId, setAllListings)
+  }, [leagueId])
+
+  const listings = allListings.filter(
+    (l) => l.sellerTeamId === teamId && l.season === league.currentSeason,
+  )
+  const pendingOrOpen = listings.filter(
+    (l) => l.status === 'pending_approval' || l.status === 'open',
+  ).length
+  const soldTotal = countSoldTotal(transfers, teamId, league.currentSeason)
+  const soldViaAuction = countSoldViaAuction(transfers, teamId, league.currentSeason)
+  const received = countReceived(transfers, teamId, league.currentSeason)
+  const sellCheck = canSell(transfers, teamId, league.currentSeason, 'auction', pendingOrOpen)
+  const receiveCheck = canReceive(transfers, teamId, league.currentSeason)
+
+  return (
+    <details style={{ marginTop: '1rem' }}>
+      <summary>ตรวจสอบโควตา (แอดมิน)</summary>
+      <p>
+        ขายรวม (transfer สำเร็จ): {soldTotal} — ขายผ่านประมูล: {soldViaAuction} — รับเข้า: {received} —
+        รายการประมูลที่ยังไม่ปิด (pending/open): {pendingOrOpen}
+      </p>
+      <p>
+        ผลตรวจ canSell (auction): {sellCheck.allowed ? 'ขายได้' : `ขายไม่ได้ — ${sellCheck.reason}`}
+        <br />
+        ผลตรวจ canReceive: {receiveCheck.allowed ? 'รับได้' : `รับไม่ได้ — ${receiveCheck.reason}`}
+      </p>
+      <h3>Transfer ทั้งหมด (ฤดูกาลนี้)</h3>
+      <ul>
+        {transfers
+          .filter((t) => t.fromTeamId === teamId || t.toTeamId === teamId)
+          .map((t) => (
+            <li key={t.id}>
+              {t.type} — {t.playerName} — จาก {t.fromTeamId} ไป {t.toTeamId} — {t.price}M
+            </li>
+          ))}
+        {transfers.filter((t) => t.fromTeamId === teamId || t.toTeamId === teamId).length === 0 && (
+          <li>ไม่มี</li>
+        )}
+      </ul>
+      <h3>Auction Listing ทั้งหมด (ฤดูกาลนี้ ทุกสถานะ)</h3>
+      <ul>
+        {listings.map((l) => (
+          <li key={l.id}>
+            {l.playerName} — สถานะ: {l.status} — ราคาเริ่ม {l.startingPrice}M
+            {l.highestBid !== null && ` — สูงสุด ${l.highestBid}M โดย ${l.highestBidderTeamName}`}
+          </li>
+        ))}
+        {listings.length === 0 && <li>ไม่มี</li>}
+      </ul>
+    </details>
   )
 }

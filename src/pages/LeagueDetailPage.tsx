@@ -15,6 +15,7 @@ import {
   subscribeSeasonMatches,
   subscribeTeams,
   subscribeTearRequests,
+  updateLeagueSettings,
   updateTeam,
 } from '@/features/leagues/api'
 import { computeStandings } from '@/features/leagues/standings'
@@ -99,6 +100,13 @@ export default function LeagueDetailPage() {
             </button>
           )}
         </section>
+      )}
+
+      {role === 'admin' && (
+        <LeagueSettingsForm
+          league={league}
+          onSubmit={(settings) => run(() => updateLeagueSettings(leagueId, settings))}
+        />
       )}
 
       <h2>ตารางคะแนน</h2>
@@ -272,6 +280,126 @@ export default function LeagueDetailPage() {
         </section>
       )}
     </main>
+  )
+}
+
+/**
+ * เอกสาร phase 07 ข้อ 1: ตัวเลขทางการเงินทั้งหมดปรับได้ในหน้าเดียว แก้ทีหลังได้ตลอด
+ * ไม่ใช่กำหนดตายตัวตอนสร้างลีกครั้งเดียว
+ */
+function LeagueSettingsForm({
+  league,
+  onSubmit,
+}: {
+  league: League
+  onSubmit: (settings: {
+    forfeitPenalty: number
+    academy72Limit: number
+    unbeatenBonus: number
+    auctionTaxRate: number
+    tearBuyerCost: number
+    tearOriginCompensation: number
+  }) => void
+}) {
+  const [forfeitPenalty, setForfeitPenalty] = useState(String(league.forfeitPenalty))
+  const [academy72Limit, setAcademy72Limit] = useState(String(league.academy72Limit))
+  const [unbeatenBonus, setUnbeatenBonus] = useState(String(league.unbeatenBonus))
+  const [auctionTaxPercent, setAuctionTaxPercent] = useState(String(league.auctionTaxRate * 100))
+  const [tearBuyerCost, setTearBuyerCost] = useState(String(league.tearBuyerCost))
+  const [tearOriginCompensation, setTearOriginCompensation] = useState(
+    String(league.tearOriginCompensation),
+  )
+
+  function handleSubmit(e: FormEvent) {
+    e.preventDefault()
+    onSubmit({
+      forfeitPenalty: Number(forfeitPenalty),
+      academy72Limit: Number(academy72Limit),
+      unbeatenBonus: Number(unbeatenBonus),
+      auctionTaxRate: Number(auctionTaxPercent) / 100,
+      tearBuyerCost: Number(tearBuyerCost),
+      tearOriginCompensation: Number(tearOriginCompensation),
+    })
+  }
+
+  return (
+    <form onSubmit={handleSubmit}>
+      <h2>ตั้งค่าลีก (ตัวเลขทางการเงิน)</h2>
+      <label>
+        ค่าปรับนัดไม่ส่งผล (M/ทีม){' '}
+        <input
+          type="number"
+          min={0}
+          value={forfeitPenalty}
+          onChange={(e) => setForfeitPenalty(e.target.value)}
+          required
+          style={{ width: '7em' }}
+        />
+      </label>
+      <br />
+      <label>
+        ถือ Academy72 ได้สูงสุด (คน){' '}
+        <input
+          type="number"
+          min={0}
+          value={academy72Limit}
+          onChange={(e) => setAcademy72Limit(e.target.value)}
+          required
+          style={{ width: '7em' }}
+        />
+      </label>
+      <br />
+      <label>
+        โบนัสแชมป์ไร้พ่าย (M){' '}
+        <input
+          type="number"
+          min={0}
+          value={unbeatenBonus}
+          onChange={(e) => setUnbeatenBonus(e.target.value)}
+          required
+          style={{ width: '7em' }}
+        />
+      </label>
+      <br />
+      <label>
+        ภาษีขายผ่านประมูล (%){' '}
+        <input
+          type="number"
+          min={0}
+          max={100}
+          value={auctionTaxPercent}
+          onChange={(e) => setAuctionTaxPercent(e.target.value)}
+          required
+          style={{ width: '7em' }}
+        />
+      </label>
+      <br />
+      <label>
+        ค่าฉีกสัญญา ที่ผู้ฉีกจ่าย (M){' '}
+        <input
+          type="number"
+          min={0}
+          value={tearBuyerCost}
+          onChange={(e) => setTearBuyerCost(e.target.value)}
+          required
+          style={{ width: '7em' }}
+        />
+      </label>
+      <br />
+      <label>
+        ค่าชดเชยตอนโดนฉีก (M){' '}
+        <input
+          type="number"
+          min={0}
+          value={tearOriginCompensation}
+          onChange={(e) => setTearOriginCompensation(e.target.value)}
+          required
+          style={{ width: '7em' }}
+        />
+      </label>
+      <br />
+      <button type="submit">บันทึกการตั้งค่า</button>
+    </form>
   )
 }
 

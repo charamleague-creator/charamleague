@@ -18,10 +18,11 @@ import { buildCurrentAdminLogWrite } from '@/features/adminLog/api'
 import { db } from '@/lib/firebase'
 import { generateRoundRobin } from './fixtures'
 import {
+  DEFAULT_AUCTION_TAX_RATE,
   DEFAULT_FORFEIT_PENALTY,
+  DEFAULT_TEAR_BUYER_COST,
+  DEFAULT_TEAR_ORIGIN_COMPENSATION,
   DEFAULT_UNBEATEN_BONUS,
-  TEAR_BUYER_COST,
-  TEAR_ORIGIN_COMPENSATION,
   auctionSellerProceeds,
   blockedTearPairKey,
   resolveTearRequests,
@@ -79,6 +80,9 @@ function toLeague(snap: QueryDocumentSnapshot<DocumentData>): League {
     forfeitPenalty: data.forfeitPenalty ?? DEFAULT_FORFEIT_PENALTY,
     academy72Limit: data.academy72Limit ?? DEFAULT_ACADEMY72_LIMIT,
     unbeatenBonus: data.unbeatenBonus ?? DEFAULT_UNBEATEN_BONUS,
+    auctionTaxRate: data.auctionTaxRate ?? DEFAULT_AUCTION_TAX_RATE,
+    tearBuyerCost: data.tearBuyerCost ?? DEFAULT_TEAR_BUYER_COST,
+    tearOriginCompensation: data.tearOriginCompensation ?? DEFAULT_TEAR_ORIGIN_COMPENSATION,
   }
 }
 function toTeam(snap: QueryDocumentSnapshot<DocumentData>): Team {
@@ -451,7 +455,7 @@ export async function closeAuction(leagueId: string, listingId: string): Promise
   const player = toPlayer(playerSnap as QueryDocumentSnapshot<DocumentData>)
   const sellerTeam = toTeam(sellerTeamSnap as QueryDocumentSnapshot<DocumentData>)
   const buyerTeam = toTeam(buyerTeamSnap as QueryDocumentSnapshot<DocumentData>)
-  const sellerProceeds = auctionSellerProceeds(winnerPrice)
+  const sellerProceeds = auctionSellerProceeds(winnerPrice, league.auctionTaxRate)
 
   await commitInChunks([
     (batch) =>
@@ -640,6 +644,9 @@ export async function createLeague(
         forfeitPenalty,
         academy72Limit,
         unbeatenBonus,
+        auctionTaxRate: DEFAULT_AUCTION_TAX_RATE,
+        tearBuyerCost: DEFAULT_TEAR_BUYER_COST,
+        tearOriginCompensation: DEFAULT_TEAR_ORIGIN_COMPENSATION,
       }),
     buildCurrentAdminLogWrite('create_league', {
       leagueId: ref.id,
@@ -650,6 +657,28 @@ export async function createLeague(
     }),
   ])
   return ref.id
+}
+
+/**
+ * ตั้งค่าตัวเลขทางการเงินของลีก "ในหน้าเดียว" (เอกสาร phase 07 ข้อ 1) — แก้ทีหลังได้ตลอด
+ * ไม่ใช่กำหนดตายตัวตอนสร้างลีกครั้งเดียวเหมือนเดิม มีผลกับการคำนวณครั้งถัดไปเท่านั้น
+ * (ไม่กระทบธุรกรรมที่ผ่านไปแล้ว เพราะบันทึกยอดเงินจริงไว้ใน transactions log ตอนนั้นแล้ว)
+ */
+export async function updateLeagueSettings(
+  leagueId: string,
+  settings: {
+    forfeitPenalty: number
+    academy72Limit: number
+    unbeatenBonus: number
+    auctionTaxRate: number
+    tearBuyerCost: number
+    tearOriginCompensation: number
+  },
+): Promise<void> {
+  await commitInChunks([
+    (batch) => batch.update(doc(db, 'leagues', leagueId), settings),
+    buildCurrentAdminLogWrite('update_league_settings', { leagueId, ...settings }),
+  ])
 }
 
 export async function deleteLeague(leagueId: string): Promise<void> {
@@ -824,10 +853,11 @@ async function commitInChunks(writes: Array<(batch: ReturnType<typeof writeBatch
  */
 async function resolveTearRequestsForSeason(
   leagueId: string,
-  season: number,
+  league: League,
   teamById: Map<string, Team>,
   priorBalanceDelta: Map<string, number>,
 ) {
+  const season = league.currentSeason
   const [pendingSnap, allTearSnap] = await Promise.all([
     getDocs(query(tearRequestsCol(leagueId), where('season', '==', season), where('status', '==', 'pending'))),
     getDocs(query(tearRequestsCol(leagueId), where('status', '==', 'success'))),
@@ -863,6 +893,8 @@ async function resolveTearRequestsForSeason(
     })),
     (teamId) => (teamById.get(teamId)?.balance ?? 0) + (priorBalanceDelta.get(teamId) ?? 0),
     blockedPairs,
+    league.tearBuyerCost,
+    league.tearOriginCompensation,
   )
 
   const writes: Array<(batch: ReturnType<typeof writeBatch>) => void> = []
@@ -878,11 +910,11 @@ async function resolveTearRequestsForSeason(
 
     balanceDelta.set(
       req.requesterTeamId,
-      (balanceDelta.get(req.requesterTeamId) ?? 0) - TEAR_BUYER_COST,
+      (balanceDelta.get(req.requesterTeamId) ?? 0) - league.tearBuyerCost,
     )
     balanceDelta.set(
       req.targetTeamId,
-      (balanceDelta.get(req.targetTeamId) ?? 0) + TEAR_ORIGIN_COMPENSATION,
+      (balanceDelta.get(req.targetTeamId) ?? 0) + league.tearOriginCompensation,
     )
 
     const playerSnap = await getDoc(
@@ -909,7 +941,7 @@ async function resolveTearRequestsForSeason(
         type: 'expense',
         category: 'tear_paid',
         desc: `ฉีกสัญญาดึง ${player.name} จาก ${req.targetTeamName}`,
-        amount: TEAR_BUYER_COST,
+        amount: league.tearBuyerCost,
         season,
       }),
     )
@@ -918,7 +950,7 @@ async function resolveTearRequestsForSeason(
         type: 'income',
         category: 'tear_compensation',
         desc: `ถูกฉีกสัญญา ${player.name} โดย ${req.requesterTeamName} (ค่าชดเชย)`,
-        amount: TEAR_ORIGIN_COMPENSATION,
+        amount: league.tearOriginCompensation,
         season,
       }),
     )
@@ -1072,7 +1104,7 @@ export async function endSeason(leagueId: string): Promise<void> {
 
   const { writes: tearWrites, balanceDelta: tearDelta } = await resolveTearRequestsForSeason(
     leagueId,
-    league.currentSeason,
+    league,
     teamById,
     balanceDelta,
   )

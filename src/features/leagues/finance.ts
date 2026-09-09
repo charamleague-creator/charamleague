@@ -43,15 +43,20 @@ export const DEFAULT_FORFEIT_PENALTY = 1
  */
 export const DEFAULT_UNBEATEN_BONUS = 5
 
-export const AUCTION_TAX_RATE = 0.3
+/**
+ * ภาษีขายผ่านประมูล (เอกสารข้อ 7 phase 05: "ควรตั้งค่าได้ทั้งหมด ไม่ตายตัวในโค้ดแบบระบบเดิม")
+ * ตั้งค่าได้ต่อลีก ค่าเริ่มต้น 30%
+ */
+export const DEFAULT_AUCTION_TAX_RATE = 0.3
 
-/** ผู้ขายได้รับ = finalPrice x 0.7 (หักภาษี 30%) ปัดทศนิยม 2 ตำแหน่งกันปัญหา floating point */
-export function auctionSellerProceeds(finalPrice: number): number {
-  return Math.round(finalPrice * (1 - AUCTION_TAX_RATE) * 100) / 100
+/** ผู้ขายได้รับ = finalPrice x (1 - taxRate) ปัดทศนิยม 2 ตำแหน่งกันปัญหา floating point */
+export function auctionSellerProceeds(finalPrice: number, taxRate: number = DEFAULT_AUCTION_TAX_RATE): number {
+  return Math.round(finalPrice * (1 - taxRate) * 100) / 100
 }
 
-export const TEAR_BUYER_COST = 80
-export const TEAR_ORIGIN_COMPENSATION = 40
+/** ค่าฉีกสัญญา/ค่าชดเชย — ตั้งค่าได้ต่อลีกเหมือนกัน (เอกสารข้อ 7 phase 05) ค่าเริ่มต้น 80M/40M */
+export const DEFAULT_TEAR_BUYER_COST = 80
+export const DEFAULT_TEAR_ORIGIN_COMPENSATION = 40
 
 export interface TearResolutionInput {
   id: string
@@ -89,6 +94,8 @@ export function resolveTearRequests(
   requests: TearResolutionInput[],
   getBalance: (teamId: string) => number,
   blockedPairs: ReadonlySet<string> = new Set(),
+  tearBuyerCost: number = DEFAULT_TEAR_BUYER_COST,
+  tearOriginCompensation: number = DEFAULT_TEAR_ORIGIN_COMPENSATION,
 ): TearResolutionResult[] {
   const byPlayer = new Map<string, TearResolutionInput[]>()
   for (const req of requests) {
@@ -127,7 +134,7 @@ export function resolveTearRequests(
       }
 
       const currentBalance = getBalance(req.requesterTeamId) + (pendingDelta.get(req.requesterTeamId) ?? 0)
-      if (currentBalance < TEAR_BUYER_COST) {
+      if (currentBalance < tearBuyerCost) {
         results.push({
           id: req.id,
           playerId: req.playerId,
@@ -138,8 +145,8 @@ export function resolveTearRequests(
         continue
       }
 
-      pendingDelta.set(req.requesterTeamId, (pendingDelta.get(req.requesterTeamId) ?? 0) - TEAR_BUYER_COST)
-      pendingDelta.set(req.targetTeamId, (pendingDelta.get(req.targetTeamId) ?? 0) + TEAR_ORIGIN_COMPENSATION)
+      pendingDelta.set(req.requesterTeamId, (pendingDelta.get(req.requesterTeamId) ?? 0) - tearBuyerCost)
+      pendingDelta.set(req.targetTeamId, (pendingDelta.get(req.targetTeamId) ?? 0) + tearOriginCompensation)
       results.push({
         id: req.id,
         playerId: req.playerId,

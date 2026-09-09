@@ -8,6 +8,9 @@ export interface League {
   forfeitPenalty: number
   academy72Limit: number
   unbeatenBonus: number
+  auctionTaxRate: number
+  tearBuyerCost: number
+  tearOriginCompensation: number
 }
 
 export interface Team {
