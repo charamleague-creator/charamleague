@@ -11,13 +11,24 @@ export const TAG_VALUE: Record<PlayerTag, number> = {
 
 /**
  * Tag พิเศษ "veteran" (แจกโดยแอดมินเลือกเอง แยกจาก Tag หลัก 5 อัน) — ตอนย่อยนักเตะ
- * ได้เงินเพิ่ม 2M ต่อจาก TAG_VALUE เดิม (เรื่องอายุ/เลิกเล่นอัตโนมัติที่ tag นี้เกี่ยวข้องด้วย
- * ยังไม่ทำ เพราะระบบอายุเปลี่ยนตามฤดูกาลยังไม่มี — รอคุยแยกทีหลัง)
+ * ได้เงินเพิ่ม 2M ต่อจาก TAG_VALUE เดิม
  */
 export const VETERAN_TAG_BONUS = 2
 
 export function sellOffPayout(tag: PlayerTag, isVeteran: boolean): number {
   return TAG_VALUE[tag] + (isVeteran ? VETERAN_TAG_BONUS : 0)
+}
+
+/**
+ * เกษียณอัตโนมัติตอนจบฤดูกาล (เอกสารข้อ 2/6, phase 02) — อายุ+1 ก่อน แล้วถ้าถึงเกณฑ์ถือว่าฤดูกาล
+ * ที่ผ่านมาเป็นฤดูกาลสุดท้าย เกษียณทันที ไม่ได้เงินคืนเลย (ต่างจากย่อยนักเตะ) ทีมฟอสไม่ต้องอัปอายุ/
+ * เกษียณเลย (นักเตะไม่แก่ขึ้นตอนทีมฟอส)
+ */
+export const RETIREMENT_AGE = 36
+export const VETERAN_RETIREMENT_AGE = 41
+
+export function shouldRetire(newAge: number, isVeteran: boolean): boolean {
+  return newAge >= (isVeteran ? VETERAN_RETIREMENT_AGE : RETIREMENT_AGE)
 }
 
 /**

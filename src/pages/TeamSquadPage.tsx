@@ -3,6 +3,7 @@ import { useParams } from 'react-router-dom'
 import {
   addPlayer,
   adjustTeamBalance,
+  approveLineup,
   createAuctionListing,
   createTearRequest,
   removePlayer,
@@ -12,6 +13,7 @@ import {
   subscribePlayers,
   subscribeTeams,
   subscribeTransactions,
+  submitLineup,
 } from '@/features/leagues/api'
 import { sellOffPayout } from '@/features/leagues/finance'
 import type { League, Player, PlayerPosition, PlayerTag, Team, Transaction } from '@/features/leagues/types'
@@ -155,6 +157,24 @@ export default function TeamSquadPage() {
     }
   }
 
+  async function handleSubmitLineup() {
+    setError(null)
+    try {
+      await submitLineup(currentLeagueId, currentTeamId)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  async function handleApproveLineup() {
+    setError(null)
+    try {
+      await approveLineup(currentLeagueId, currentTeamId)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
   const canRequestTearAsOwnTeam = !!myTeam && myTeam.id !== teamId
   const canRequestTearAsAdmin = role === 'admin' && otherTeams.length > 0
 
@@ -162,7 +182,22 @@ export default function TeamSquadPage() {
     <main style={{ maxWidth: 640, margin: '2rem auto' }}>
       <h1>{team?.name ?? 'ทีม'} — รายชื่อผู้เล่น</h1>
       <p>
-        จำนวนผู้เล่นในทีม: {players.length} · Balance: {team?.balance ?? '-'}M
+        จำนวนผู้เล่นในทีม: {players.length} · Balance: {team?.balance ?? '-'}M · Lineup:{' '}
+        {team?.lineupApproved
+          ? 'อนุมัติแล้ว'
+          : team?.lineupSubmitted
+            ? 'ส่งแล้ว รออนุมัติ'
+            : 'ยังไม่ส่ง'}
+        {canManageSquad && !team?.lineupApproved && (
+          <button type="button" onClick={handleSubmitLineup}>
+            ส่ง Lineup
+          </button>
+        )}
+        {role === 'admin' && team?.lineupSubmitted && !team?.lineupApproved && (
+          <button type="button" onClick={handleApproveLineup}>
+            อนุมัติ Lineup
+          </button>
+        )}
       </p>
       {error && <p role="alert">{error}</p>}
       <ul>

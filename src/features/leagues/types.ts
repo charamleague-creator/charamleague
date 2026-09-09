@@ -15,6 +15,8 @@ export interface Team {
   managerName: string
   isForfeited: boolean
   balance: number
+  lineupSubmitted: boolean
+  lineupApproved: boolean
 }
 
 export type MatchStatus = 'scheduled' | 'played' | 'bye'

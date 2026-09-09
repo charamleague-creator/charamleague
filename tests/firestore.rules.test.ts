@@ -150,6 +150,52 @@ describe('leagues/{leagueId}/teams/{teamId}', () => {
       updateDoc(doc(admin.firestore(), 'leagues/superleague/teams/t1'), { balance: 0 }),
     )
   })
+
+  it('manager เจ้าของทีมส่ง Lineup เองได้ (lineupSubmitted: true, lineupApproved: false)', async () => {
+    await seedTeams()
+    const manager = testEnv.authenticatedContext('manager-1', { role: 'manager' })
+    await assertSucceeds(
+      updateDoc(doc(manager.firestore(), 'leagues/superleague/teams/t1'), {
+        lineupSubmitted: true,
+        lineupApproved: false,
+      }),
+    )
+  })
+
+  it('manager ตั้ง lineupApproved เป็น true เองไม่ได้ (สิทธิ์ admin เท่านั้น)', async () => {
+    await seedTeams()
+    const manager = testEnv.authenticatedContext('manager-1', { role: 'manager' })
+    await assertFails(
+      updateDoc(doc(manager.firestore(), 'leagues/superleague/teams/t1'), {
+        lineupSubmitted: true,
+        lineupApproved: true,
+      }),
+    )
+  })
+
+  it('manager ทีมอื่นส่ง Lineup แทนทีมนี้ไม่ได้', async () => {
+    await seedTeams()
+    const outsider = testEnv.authenticatedContext('manager-2', { role: 'manager' })
+    await assertFails(
+      updateDoc(doc(outsider.firestore(), 'leagues/superleague/teams/t1'), {
+        lineupSubmitted: true,
+        lineupApproved: false,
+      }),
+    )
+  })
+
+  it('admin อนุมัติ Lineup ได้', async () => {
+    await seedTeams()
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await updateDoc(doc(context.firestore(), 'leagues/superleague/teams/t1'), {
+        lineupSubmitted: true,
+      })
+    })
+    const admin = testEnv.authenticatedContext('admin-1', { role: 'admin' })
+    await assertSucceeds(
+      updateDoc(doc(admin.firestore(), 'leagues/superleague/teams/t1'), { lineupApproved: true }),
+    )
+  })
 })
 
 describe('leagues/{leagueId}/teams/{teamId}/players/{playerId}', () => {

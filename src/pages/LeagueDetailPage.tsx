@@ -241,7 +241,15 @@ export default function LeagueDetailPage() {
           <ul>
             {teams.map((team) => (
               <li key={team.id}>
-                {team.name} (ผู้จัดการทีม: {team.managerName}, Balance: {team.balance}M){' '}
+                {team.name} (ผู้จัดการทีม: {team.managerName}, Balance: {team.balance}M, Lineup:{' '}
+                {team.isForfeited
+                  ? 'ฟอส (ข้ามได้)'
+                  : team.lineupApproved
+                    ? 'อนุมัติแล้ว'
+                    : team.lineupSubmitted
+                      ? 'ส่งแล้ว รออนุมัติ'
+                      : 'ยังไม่ส่ง'}
+                ){' '}
                 <label>
                   <input
                     type="checkbox"

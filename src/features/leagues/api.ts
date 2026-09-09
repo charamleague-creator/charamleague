@@ -25,6 +25,7 @@ import {
   blockedTearPairKey,
   resolveTearRequests,
   sellOffPayout,
+  shouldRetire,
 } from './finance'
 import { canReceive, canSell } from './quotas'
 import type {
@@ -85,6 +86,8 @@ function toTeam(snap: QueryDocumentSnapshot<DocumentData>): Team {
     managerName: data.managerName,
     isForfeited: data.isForfeited,
     balance: data.balance,
+    lineupSubmitted: data.lineupSubmitted ?? false,
+    lineupApproved: data.lineupApproved ?? false,
   }
 }
 function toMatch(snap: QueryDocumentSnapshot<DocumentData>): Match {
@@ -652,7 +655,46 @@ export async function createTeam(
   leagueId: string,
   input: { name: string; managerUid: string; managerName: string; balance: number },
 ): Promise<void> {
-  await addDoc(teamsCol(leagueId), { ...input, isForfeited: false })
+  await addDoc(teamsCol(leagueId), {
+    ...input,
+    isForfeited: false,
+    lineupSubmitted: false,
+    lineupApproved: false,
+  })
+}
+
+/**
+ * ทีมยืนยันว่า squad มี 18 คนพร้อมแล้ว (ไม่เกี่ยวกับการเลือกตัวจริง แค่เช็คจำนวน) เงื่อนไข
+ * เอกสาร phase 02 ข้อ 3: ครบ 18 คน + ยอดเงินไม่ติดลบ ถึงจะส่งได้ แอดมินอนุมัติอีกทีก่อนเริ่มฤดูกาลใหม่
+ */
+export async function submitLineup(leagueId: string, teamId: string): Promise<void> {
+  const [teamSnap, playersSnap] = await Promise.all([
+    getDoc(doc(db, 'leagues', leagueId, 'teams', teamId)),
+    getDocs(playersCol(leagueId, teamId)),
+  ])
+  if (!teamSnap.exists()) throw new Error('ไม่พบทีม')
+  const team = toTeam(teamSnap as QueryDocumentSnapshot<DocumentData>)
+  if (playersSnap.size !== 18) {
+    throw new Error(`ทีมต้องมีนักเตะครบ 18 คนถึงจะส่ง Lineup ได้ (ตอนนี้มี ${playersSnap.size} คน)`)
+  }
+  if (team.balance < 0) {
+    throw new Error('ยอดเงินติดลบ ต้องแก้ให้ไม่ติดลบก่อนส่ง Lineup')
+  }
+  await commitInChunks([
+    (batch) =>
+      batch.update(doc(db, 'leagues', leagueId, 'teams', teamId), {
+        lineupSubmitted: true,
+        lineupApproved: false,
+      }),
+  ])
+}
+
+export async function approveLineup(leagueId: string, teamId: string): Promise<void> {
+  await commitInChunks([
+    (batch) =>
+      batch.update(doc(db, 'leagues', leagueId, 'teams', teamId), { lineupApproved: true }),
+    buildCurrentAdminLogWrite('approve_lineup', { leagueId, teamId }),
+  ])
 }
 
 /** แอดมินปรับ balance มือ (เช่น แก้ไขข้อผิดพลาด, ปรับตามกรณีพิเศษ) — บันทึกเป็น transaction เสมอ */
@@ -926,6 +968,30 @@ export async function endSeason(leagueId: string): Promise<void> {
     )
   }
 
+  // เอกสาร phase 02 ข้อ 6, ขั้น 3: อายุ+1 แล้วเกษียณทันทีถ้าถึงเกณฑ์ (36 ปกติ, 41 ถ้ามี tag veteran)
+  // ไม่ได้เงินคืนเลย — ทีมฟอสข้าม ไม่ต้องอัปอายุ/เกษียณ (นักเตะไม่แก่ขึ้น)
+  let retiredCount = 0
+  for (const team of teamById.values()) {
+    if (team.isForfeited) continue
+    const playersSnap = await getDocs(playersCol(leagueId, team.id))
+    for (const playerDoc of playersSnap.docs) {
+      const player = toPlayer(playerDoc as QueryDocumentSnapshot<DocumentData>)
+      const newAge = player.age + 1
+      if (shouldRetire(newAge, player.isVeteran)) {
+        retiredCount++
+        writes.push((batch) =>
+          batch.delete(doc(db, 'leagues', leagueId, 'teams', team.id, 'players', player.id)),
+        )
+      } else {
+        writes.push((batch) =>
+          batch.update(doc(db, 'leagues', leagueId, 'teams', team.id, 'players', player.id), {
+            age: newAge,
+          }),
+        )
+      }
+    }
+  }
+
   const { writes: tearWrites } = await resolveTearRequestsForSeason(leagueId, league.currentSeason)
   writes.push(...tearWrites)
 
@@ -938,6 +1004,7 @@ export async function endSeason(leagueId: string): Promise<void> {
       season: league.currentSeason,
       byeMatches: scheduled.length,
       unreportedMatches: unreportedCount,
+      retiredPlayers: retiredCount,
       tearRequestsResolved: tearWrites.length,
     }),
   )
@@ -955,6 +1022,14 @@ export async function startNewSeason(leagueId: string): Promise<void> {
   const teams = teamsSnap.docs.map(toTeam)
   if (teams.length < 2) throw new Error('ต้องมีทีมอย่างน้อย 2 ทีมก่อนเริ่มฤดูกาลใหม่')
 
+  // เอกสาร phase 02 ข้อ 3/7: ทีมที่ไม่ฟอสต้องส่ง Lineup + แอดมินอนุมัติแล้วเท่านั้น ทีมฟอสข้ามได้เลย
+  const notReady = teams.filter((t) => !t.isForfeited && !t.lineupApproved)
+  if (notReady.length > 0) {
+    throw new Error(
+      `ทีมยังไม่พร้อม (ยังไม่ส่ง/ยังไม่อนุมัติ Lineup): ${notReady.map((t) => t.name).join(', ')}`,
+    )
+  }
+
   const stillScheduled = await getDocs(
     query(
       matchesCol(leagueId),
@@ -966,14 +1041,33 @@ export async function startNewSeason(leagueId: string): Promise<void> {
     throw new Error('ยังมีนัดที่ยังไม่จบของฤดูกาลปัจจุบัน — กรุณาจบฤดูกาลก่อน')
   }
 
+  // เอกสาร phase 02 ข้อ 7: บังคับปิดรายการตลาดที่ยังค้างจากฤดูกาลก่อน ก่อนเริ่มนับโควตาใหม่
+  const staleListingsSnap = await getDocs(
+    query(auctionListingsCol(leagueId), where('season', '==', league.currentSeason)),
+  )
+  const staleListings = staleListingsSnap.docs
+    .map(toAuctionListing)
+    .filter((l) => l.status === 'pending_approval' || l.status === 'open')
+
   const newSeason = league.currentSeason + 1
   const teamById = new Map(teams.map((t) => [t.id, t]))
   const fixtures = generateRoundRobin(teams.map((t) => t.id), newSeason)
 
   const writes: Array<(batch: ReturnType<typeof writeBatch>) => void> = []
   for (const team of teams) {
+    // เอกสาร phase 02 ข้อ 5: ห้ามรีเซ็ต isForfeited กลับเป็น false เอง ต้องให้แอดมินปลดเท่านั้น
     writes.push((batch) =>
-      batch.update(doc(db, 'leagues', leagueId, 'teams', team.id), { isForfeited: false }),
+      batch.update(doc(db, 'leagues', leagueId, 'teams', team.id), {
+        lineupSubmitted: false,
+        lineupApproved: false,
+      }),
+    )
+  }
+  for (const listing of staleListings) {
+    writes.push((batch) =>
+      batch.update(doc(db, 'leagues', leagueId, 'auctionListings', listing.id), {
+        status: 'closed_no_winner',
+      }),
     )
   }
   for (const fixture of fixtures) {

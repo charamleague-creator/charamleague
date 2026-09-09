@@ -37,10 +37,18 @@ service cloud.firestore {
         // Finance: ย่อยนักเตะ (sellOffPlayer) เป็น self-service ของทีมเจ้าของเอง เพิ่ม balance
         // ให้ตัวเองได้เท่านั้น (field เดียว ทิศทางเดียว) เหมือน guideline เดิมที่ให้ทีมทำ
         // same-team action เองได้ — เงินลด/ลบ/field อื่นๆ ยังเป็นสิทธิ์ admin เท่านั้นเสมอ
+        // Phase 02 ข้อ 3: ทีมเจ้าของส่ง Lineup เองได้ (แค่ยืนยันจำนวนครบ ไม่ใช่เงิน) แอดมินอนุมัติ
+        // แยกอีกที (lineupApproved) — ห้ามทีมเจ้าของตั้ง approved=true เอง
         allow update: if isAdmin() || (
           managesTeam(database, leagueId, teamId) &&
           request.resource.data.diff(resource.data).affectedKeys().hasOnly(['balance']) &&
           request.resource.data.balance > resource.data.balance
+        ) || (
+          managesTeam(database, leagueId, teamId) &&
+          request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['lineupSubmitted', 'lineupApproved']) &&
+          request.resource.data.lineupSubmitted == true &&
+          request.resource.data.lineupApproved == false
         );
         allow create, delete: if isAdmin();
 

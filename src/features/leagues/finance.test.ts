@@ -4,6 +4,7 @@ import {
   blockedTearPairKey,
   resolveTearRequests,
   sellOffPayout,
+  shouldRetire,
   type TearResolutionInput,
 } from './finance'
 
@@ -32,6 +33,19 @@ describe('sellOffPayout', () => {
   it('บวกเพิ่ม 2M ถ้ามี tag พิเศษ veteran', () => {
     expect(sellOffPayout('Academy72', true)).toBe(12)
     expect(sellOffPayout('Free', true)).toBe(3)
+  })
+})
+
+describe('shouldRetire', () => {
+  it('เกษียณตอนอายุครบ 36 ถ้าไม่มี tag veteran', () => {
+    expect(shouldRetire(35, false)).toBe(false)
+    expect(shouldRetire(36, false)).toBe(true)
+  })
+
+  it('เล่นได้ถึง 40 เกษียณตอน 41 ถ้ามี tag veteran', () => {
+    expect(shouldRetire(36, true)).toBe(false)
+    expect(shouldRetire(40, true)).toBe(false)
+    expect(shouldRetire(41, true)).toBe(true)
   })
 })
 
