@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { canReceive, canSell, countReceived, countSoldTotal, countSoldViaAuction } from './quotas'
-import type { Transfer } from './types'
+import {
+  canReceive,
+  canSell,
+  countAcademy72,
+  countReceived,
+  countSoldTotal,
+  countSoldViaAuction,
+} from './quotas'
+import type { Player, Transfer } from './types'
 
 function transfer(overrides: Partial<Transfer>): Transfer {
   return {
@@ -70,6 +77,21 @@ describe('canSell', () => {
     const transfers = Array.from({ length: 4 }, () => transfer({ fromTeamId: 't1' }))
     const result = canSell(transfers, 't1', 1, 'auction', 1)
     expect(result.allowed).toBe(false)
+  })
+})
+
+describe('countAcademy72', () => {
+  function player(tag: Player['tag']): Player {
+    return { id: 'x', name: 'P', position: 'MF', age: 20, joinedSeason: 1, tag, isVeteran: false }
+  }
+
+  it('นับเฉพาะ Tag Academy72', () => {
+    const players = [player('Academy72'), player('Academy72'), player('Free'), player('Worldcup')]
+    expect(countAcademy72(players)).toBe(2)
+  })
+
+  it('ทีมไม่มี Academy72 เลย นับได้ 0', () => {
+    expect(countAcademy72([player('Free')])).toBe(0)
   })
 })
 

@@ -1,4 +1,4 @@
-import type { Transfer } from './types'
+import type { Player, Transfer } from './types'
 
 /**
  * โควตาซื้อขาย (doc ส่วน 5.2) — คำนวณสดจาก transfers ที่เกิดขึ้นจริงเสมอ
@@ -7,6 +7,16 @@ import type { Transfer } from './types'
 export const MAX_SOLD_VIA_AUCTION_PER_SEASON = 4
 export const MAX_SOLD_TOTAL_PER_SEASON = 5
 export const MAX_RECEIVED_PER_SEASON = 5
+
+/**
+ * ถือครอง Academy72 พร้อมกันได้สูงสุดกี่คน (phase 03 ข้อ 2) — ตั้งค่าได้ต่อลีก
+ * บล็อกแค่ตอนส่ง Lineup เท่านั้น ไม่บล็อกระหว่างตลาด (ซื้อขายได้ปกติ แค่ส่ง Lineup ไม่ได้ถ้าเกิน)
+ */
+export const DEFAULT_ACADEMY72_LIMIT = 3
+
+export function countAcademy72(players: Player[]): number {
+  return players.filter((p) => p.tag === 'Academy72').length
+}
 
 export function countSoldViaAuction(transfers: Transfer[], teamId: string, season: number) {
   return transfers.filter(

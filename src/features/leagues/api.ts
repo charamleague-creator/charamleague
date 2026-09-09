@@ -27,7 +27,7 @@ import {
   sellOffPayout,
   shouldRetire,
 } from './finance'
-import { canReceive, canSell } from './quotas'
+import { DEFAULT_ACADEMY72_LIMIT, canReceive, canSell, countAcademy72 } from './quotas'
 import type {
   AuctionListing,
   League,
@@ -75,6 +75,7 @@ function toLeague(snap: QueryDocumentSnapshot<DocumentData>): League {
     status: data.status,
     currentSeason: data.currentSeason,
     forfeitPenalty: data.forfeitPenalty ?? DEFAULT_FORFEIT_PENALTY,
+    academy72Limit: data.academy72Limit ?? DEFAULT_ACADEMY72_LIMIT,
   }
 }
 function toTeam(snap: QueryDocumentSnapshot<DocumentData>): Team {
@@ -616,6 +617,7 @@ export function subscribeSeasonMatches(
 export async function createLeague(
   name: string,
   forfeitPenalty: number = DEFAULT_FORFEIT_PENALTY,
+  academy72Limit: number = DEFAULT_ACADEMY72_LIMIT,
 ): Promise<string> {
   const ref = doc(leaguesCol())
   await commitInChunks([
@@ -625,8 +627,14 @@ export async function createLeague(
         status: 'transfer_window' satisfies LeagueStatus,
         currentSeason: 1,
         forfeitPenalty,
+        academy72Limit,
       }),
-    buildCurrentAdminLogWrite('create_league', { leagueId: ref.id, name, forfeitPenalty }),
+    buildCurrentAdminLogWrite('create_league', {
+      leagueId: ref.id,
+      name,
+      forfeitPenalty,
+      academy72Limit,
+    }),
   ])
   return ref.id
 }
@@ -666,19 +674,30 @@ export async function createTeam(
 /**
  * ทีมยืนยันว่า squad มี 18 คนพร้อมแล้ว (ไม่เกี่ยวกับการเลือกตัวจริง แค่เช็คจำนวน) เงื่อนไข
  * เอกสาร phase 02 ข้อ 3: ครบ 18 คน + ยอดเงินไม่ติดลบ ถึงจะส่งได้ แอดมินอนุมัติอีกทีก่อนเริ่มฤดูกาลใหม่
+ * เอกสาร phase 03 ข้อ 2: ถือครอง Academy72 พร้อมกันเกินโควตาต่อลีก ก็ส่งไม่ได้เหมือนกัน
  */
 export async function submitLineup(leagueId: string, teamId: string): Promise<void> {
-  const [teamSnap, playersSnap] = await Promise.all([
+  const [leagueSnap, teamSnap, playersSnap] = await Promise.all([
+    getDoc(doc(db, 'leagues', leagueId)),
     getDoc(doc(db, 'leagues', leagueId, 'teams', teamId)),
     getDocs(playersCol(leagueId, teamId)),
   ])
+  if (!leagueSnap.exists()) throw new Error('ไม่พบลีก')
   if (!teamSnap.exists()) throw new Error('ไม่พบทีม')
+  const league = toLeague(leagueSnap as QueryDocumentSnapshot<DocumentData>)
   const team = toTeam(teamSnap as QueryDocumentSnapshot<DocumentData>)
-  if (playersSnap.size !== 18) {
-    throw new Error(`ทีมต้องมีนักเตะครบ 18 คนถึงจะส่ง Lineup ได้ (ตอนนี้มี ${playersSnap.size} คน)`)
+  const players = playersSnap.docs.map(toPlayer)
+  if (players.length !== 18) {
+    throw new Error(`ทีมต้องมีนักเตะครบ 18 คนถึงจะส่ง Lineup ได้ (ตอนนี้มี ${players.length} คน)`)
   }
   if (team.balance < 0) {
     throw new Error('ยอดเงินติดลบ ต้องแก้ให้ไม่ติดลบก่อนส่ง Lineup')
+  }
+  const academy72Count = countAcademy72(players)
+  if (academy72Count > league.academy72Limit) {
+    throw new Error(
+      `ถือครอง Academy72 เกินโควตา (มี ${academy72Count} คน จำกัด ${league.academy72Limit} คน) ต้องปล่อยบางคนก่อนส่ง Lineup`,
+    )
   }
   await commitInChunks([
     (batch) =>

@@ -6,6 +6,7 @@ export interface League {
   status: LeagueStatus
   currentSeason: number
   forfeitPenalty: number
+  academy72Limit: number
 }
 
 export interface Team {

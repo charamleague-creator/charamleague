@@ -2,6 +2,7 @@ import { type FormEvent, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { createLeague, deleteLeague, subscribeLeagues } from '@/features/leagues/api'
 import { DEFAULT_FORFEIT_PENALTY } from '@/features/leagues/finance'
+import { DEFAULT_ACADEMY72_LIMIT } from '@/features/leagues/quotas'
 import type { League } from '@/features/leagues/types'
 import { useAuth } from '@/hooks/useAuth'
 
@@ -10,6 +11,7 @@ export default function LeaguesListPage() {
   const [leagues, setLeagues] = useState<League[]>([])
   const [name, setName] = useState('')
   const [forfeitPenalty, setForfeitPenalty] = useState(String(DEFAULT_FORFEIT_PENALTY))
+  const [academy72Limit, setAcademy72Limit] = useState(String(DEFAULT_ACADEMY72_LIMIT))
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => subscribeLeagues(setLeagues), [])
@@ -18,9 +20,10 @@ export default function LeaguesListPage() {
     e.preventDefault()
     setError(null)
     try {
-      await createLeague(name.trim(), Number(forfeitPenalty))
+      await createLeague(name.trim(), Number(forfeitPenalty), Number(academy72Limit))
       setName('')
       setForfeitPenalty(String(DEFAULT_FORFEIT_PENALTY))
+      setAcademy72Limit(String(DEFAULT_ACADEMY72_LIMIT))
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     }
@@ -47,7 +50,7 @@ export default function LeaguesListPage() {
             <small>
               (ฤดูกาล {league.currentSeason} —{' '}
               {league.status === 'in_season' ? 'กำลังแข่งขัน' : 'ตลาดเปิด'} — ค่าปรับนัดไม่ส่งผล{' '}
-              {league.forfeitPenalty}M/ทีม)
+              {league.forfeitPenalty}M/ทีม — ถือ Academy72 ได้สูงสุด {league.academy72Limit} คน)
             </small>
             {role === 'admin' && (
               <button type="button" onClick={() => handleDelete(league.id, league.name)}>
@@ -72,6 +75,15 @@ export default function LeaguesListPage() {
             placeholder="ค่าปรับนัดไม่ส่งผล (M/ทีม)"
             value={forfeitPenalty}
             onChange={(e) => setForfeitPenalty(e.target.value)}
+            required
+            style={{ width: '11em' }}
+          />
+          <input
+            type="number"
+            min={0}
+            placeholder="ถือ Academy72 ได้สูงสุด (คน)"
+            value={academy72Limit}
+            onChange={(e) => setAcademy72Limit(e.target.value)}
             required
             style={{ width: '11em' }}
           />
