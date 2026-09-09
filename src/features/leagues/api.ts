@@ -19,6 +19,7 @@ import { db } from '@/lib/firebase'
 import { generateRoundRobin } from './fixtures'
 import {
   DEFAULT_FORFEIT_PENALTY,
+  DEFAULT_UNBEATEN_BONUS,
   TEAR_BUYER_COST,
   TEAR_ORIGIN_COMPENSATION,
   auctionSellerProceeds,
@@ -28,6 +29,7 @@ import {
   shouldRetire,
 } from './finance'
 import { DEFAULT_ACADEMY72_LIMIT, canReceive, canSell, countAcademy72 } from './quotas'
+import { computeStandings } from './standings'
 import type {
   AuctionListing,
   League,
@@ -76,6 +78,7 @@ function toLeague(snap: QueryDocumentSnapshot<DocumentData>): League {
     currentSeason: data.currentSeason,
     forfeitPenalty: data.forfeitPenalty ?? DEFAULT_FORFEIT_PENALTY,
     academy72Limit: data.academy72Limit ?? DEFAULT_ACADEMY72_LIMIT,
+    unbeatenBonus: data.unbeatenBonus ?? DEFAULT_UNBEATEN_BONUS,
   }
 }
 function toTeam(snap: QueryDocumentSnapshot<DocumentData>): Team {
@@ -618,6 +621,7 @@ export async function createLeague(
   name: string,
   forfeitPenalty: number = DEFAULT_FORFEIT_PENALTY,
   academy72Limit: number = DEFAULT_ACADEMY72_LIMIT,
+  unbeatenBonus: number = DEFAULT_UNBEATEN_BONUS,
 ): Promise<string> {
   const ref = doc(leaguesCol())
   await commitInChunks([
@@ -628,12 +632,14 @@ export async function createLeague(
         currentSeason: 1,
         forfeitPenalty,
         academy72Limit,
+        unbeatenBonus,
       }),
     buildCurrentAdminLogWrite('create_league', {
       leagueId: ref.id,
       name,
       forfeitPenalty,
       academy72Limit,
+      unbeatenBonus,
     }),
   ])
   return ref.id
@@ -787,14 +793,29 @@ async function commitInChunks(writes: Array<(batch: ReturnType<typeof writeBatch
  * กันปิงปอง: เทียบกับ tear ที่สำเร็จ "ครั้งล่าสุด" ของผู้เล่นแต่ละคน (ถ้ามี) ห้ามทีมที่เพิ่งเสียผู้เล่นไป
  * ยื่นฉีกคืนจากทีมที่เพิ่งได้ไปในทันที
  */
-async function resolveTearRequestsForSeason(leagueId: string, season: number) {
-  const [pendingSnap, allTearSnap, teamsSnap] = await Promise.all([
+/**
+ * รับ teamById + balanceDelta ที่สะสมมาจากขั้นก่อนหน้า (ค่าปรับ/เงินรางวัล) จาก endSeason โดยตรง
+ * ไม่อ่าน balance สดจาก Firestore เอง — เพราะขั้นก่อนหน้ายังไม่ commit จริง อ่านสดจะเห็นค่าเก่า
+ * (เอกสารข้อ 5: ทีมต้องมีเงินรางวัลเข้าครบก่อนถึงจะฉีกสัญญาได้ถูกต้อง) คืน balanceDelta ของตัวเอง
+ * แยกกลับไป ให้ caller รวมเป็น write เดียวต่อทีมทีเดียวตอนจบ กัน batch.update ทับกันเอง
+ */
+async function resolveTearRequestsForSeason(
+  leagueId: string,
+  season: number,
+  teamById: Map<string, Team>,
+  priorBalanceDelta: Map<string, number>,
+) {
+  const [pendingSnap, allTearSnap] = await Promise.all([
     getDocs(query(tearRequestsCol(leagueId), where('season', '==', season), where('status', '==', 'pending'))),
     getDocs(query(tearRequestsCol(leagueId), where('status', '==', 'success'))),
-    getDocs(teamsCol(leagueId)),
   ])
   const pending = pendingSnap.docs.map(toTearRequest)
-  if (pending.length === 0) return { writes: [] as Array<(batch: ReturnType<typeof writeBatch>) => void> }
+  if (pending.length === 0) {
+    return {
+      writes: [] as Array<(batch: ReturnType<typeof writeBatch>) => void>,
+      balanceDelta: new Map<string, number>(),
+    }
+  }
 
   const pastSuccesses = allTearSnap.docs.map(toTearRequest)
   const lastSuccessByPlayer = new Map<string, TearRequest>()
@@ -809,7 +830,6 @@ async function resolveTearRequestsForSeason(leagueId: string, season: number) {
     blockedPairs.add(blockedTearPairKey(t.playerId, t.targetTeamId, t.requesterTeamId))
   }
 
-  const teamById = new Map(teamsSnap.docs.map((d) => [d.id, toTeam(d)]))
   const results = resolveTearRequests(
     pending.map((r) => ({
       id: r.id,
@@ -818,7 +838,7 @@ async function resolveTearRequestsForSeason(leagueId: string, season: number) {
       targetTeamId: r.targetTeamId,
       requestedAtMs: r.requestedAtMs ?? 0,
     })),
-    (teamId) => teamById.get(teamId)?.balance ?? 0,
+    (teamId) => (teamById.get(teamId)?.balance ?? 0) + (priorBalanceDelta.get(teamId) ?? 0),
     blockedPairs,
   )
 
@@ -881,15 +901,7 @@ async function resolveTearRequestsForSeason(leagueId: string, season: number) {
     )
   }
 
-  for (const [teamId, delta] of balanceDelta) {
-    const team = teamById.get(teamId)
-    if (!team) continue
-    writes.push((batch) =>
-      batch.update(doc(db, 'leagues', leagueId, 'teams', teamId), { balance: team.balance + delta }),
-    )
-  }
-
-  return { writes }
+  return { writes, balanceDelta }
 }
 
 export async function endSeason(leagueId: string): Promise<void> {
@@ -898,7 +910,7 @@ export async function endSeason(leagueId: string): Promise<void> {
   const league = toLeague(leagueSnap as QueryDocumentSnapshot<DocumentData>)
   if (league.status !== 'in_season') throw new Error('จบฤดูกาลได้เฉพาะตอนลีกกำลังแข่งขันเท่านั้น')
 
-  const [teamsSnap, scheduledSnap] = await Promise.all([
+  const [teamsSnap, scheduledSnap, playedSnap] = await Promise.all([
     getDocs(teamsCol(leagueId)),
     getDocs(
       query(
@@ -907,12 +919,24 @@ export async function endSeason(leagueId: string): Promise<void> {
         where('status', '==', 'scheduled'),
       ),
     ),
+    getDocs(
+      query(
+        matchesCol(leagueId),
+        where('season', '==', league.currentSeason),
+        where('status', '==', 'played'),
+      ),
+    ),
   ])
+  const alreadyPlayed = playedSnap.docs.map(toMatch)
   const teamById = new Map(teamsSnap.docs.map((d) => [d.id, toTeam(d)]))
   const scheduled = scheduledSnap.docs.map(toMatch)
 
   const writes: Array<(batch: ReturnType<typeof writeBatch>) => void> = []
-  const penaltyDelta = new Map<string, number>()
+  // สะสม balance delta ของทุกขั้นไว้ที่เดียว (ค่าปรับ/โบนัส/ฉีกสัญญา) แล้วเขียน balance ทีเดียวตอน
+  // จบฟังก์ชัน — กัน batch.update() ทับกันเองถ้าทีมเดียวโดนหลายขั้นเงินในรอบเดียว (เอกสารข้อ 8:
+  // เตือนเรื่อง merge เอง ควรพึ่ง atomic ของ Firestore — นี่คือ atomic ระดับ "คำนวณสุดท้ายทีเดียว")
+  const balanceDelta = new Map<string, number>()
+  const amendedMatches: Match[] = []
   let unreportedCount = 0
 
   for (const m of scheduled) {
@@ -928,6 +952,7 @@ export async function endSeason(leagueId: string): Promise<void> {
           winnerTeamId: m.awayTeamId,
         }),
       )
+      amendedMatches.push({ ...m, status: 'bye', winnerTeamId: m.awayTeamId })
     } else if (awayForfeited && !homeForfeited) {
       writes.push((batch) =>
         batch.update(doc(db, 'leagues', leagueId, 'matches', m.id), {
@@ -935,6 +960,7 @@ export async function endSeason(leagueId: string): Promise<void> {
           winnerTeamId: m.homeTeamId,
         }),
       )
+      amendedMatches.push({ ...m, status: 'bye', winnerTeamId: m.homeTeamId })
     } else if (!homeForfeited && !awayForfeited) {
       // ไม่มีทีมไหนฟอส แต่ไม่ส่งผล — บังคับเป็น 0-0 double-bye + ปรับเงินทั้ง 2 ทีม (เอกสารข้อ 5, ขั้น 1)
       unreportedCount++
@@ -946,8 +972,8 @@ export async function endSeason(leagueId: string): Promise<void> {
           awayScore: 0,
         }),
       )
-      penaltyDelta.set(m.homeTeamId, (penaltyDelta.get(m.homeTeamId) ?? 0) + league.forfeitPenalty)
-      penaltyDelta.set(m.awayTeamId, (penaltyDelta.get(m.awayTeamId) ?? 0) + league.forfeitPenalty)
+      balanceDelta.set(m.homeTeamId, (balanceDelta.get(m.homeTeamId) ?? 0) - league.forfeitPenalty)
+      balanceDelta.set(m.awayTeamId, (balanceDelta.get(m.awayTeamId) ?? 0) - league.forfeitPenalty)
       writes.push((batch) =>
         batch.set(doc(transactionsCol(leagueId, m.homeTeamId)), {
           type: 'expense',
@@ -966,6 +992,7 @@ export async function endSeason(leagueId: string): Promise<void> {
           season: league.currentSeason,
         }),
       )
+      amendedMatches.push({ ...m, status: 'bye', winnerTeamId: null, homeScore: 0, awayScore: 0 })
     } else {
       // ทั้งสองทีมฟอสพร้อมกัน — ไม่มีผู้ชนะ ไม่ปรับเงินซ้ำ (แต่ละทีมฟอสเสียแค่แข่งแพ้บายอื่นๆอยู่แล้ว)
       writes.push((batch) =>
@@ -974,15 +1001,24 @@ export async function endSeason(leagueId: string): Promise<void> {
           winnerTeamId: null,
         }),
       )
+      amendedMatches.push({ ...m, status: 'bye', winnerTeamId: null })
     }
   }
 
-  for (const [teamId, delta] of penaltyDelta) {
-    const team = teamById.get(teamId)
-    if (!team) continue
+  // เอกสาร phase 05 ขั้น 3: โบนัสแชมป์ไร้พ่าย — ทีมอันดับ 1 ของฤดูกาล (จากผลจริงรวมนัดที่บังคับบายไปแล้ว)
+  // ที่ไม่แพ้แม้แต่นัดเดียว (row.lost === 0 ครอบคลุมทั้งแพ้จริงและบายที่แพ้อยู่แล้ว)
+  const finalMatches = [...alreadyPlayed, ...amendedMatches]
+  const standings = computeStandings(finalMatches, Array.from(teamById.values()))
+  const champion = standings[0]
+  if (champion && champion.played > 0 && champion.lost === 0) {
+    balanceDelta.set(champion.teamId, (balanceDelta.get(champion.teamId) ?? 0) + league.unbeatenBonus)
     writes.push((batch) =>
-      batch.update(doc(db, 'leagues', leagueId, 'teams', teamId), {
-        balance: team.balance - delta,
+      batch.set(doc(transactionsCol(leagueId, champion.teamId)), {
+        type: 'income',
+        category: 'unbeaten_bonus',
+        desc: `โบนัสแชมป์ไร้พ่าย ฤดูกาล ${league.currentSeason}`,
+        amount: league.unbeatenBonus,
+        season: league.currentSeason,
       }),
     )
   }
@@ -1011,8 +1047,27 @@ export async function endSeason(leagueId: string): Promise<void> {
     }
   }
 
-  const { writes: tearWrites } = await resolveTearRequestsForSeason(leagueId, league.currentSeason)
+  const { writes: tearWrites, balanceDelta: tearDelta } = await resolveTearRequestsForSeason(
+    leagueId,
+    league.currentSeason,
+    teamById,
+    balanceDelta,
+  )
   writes.push(...tearWrites)
+  for (const [teamId, delta] of tearDelta) {
+    balanceDelta.set(teamId, (balanceDelta.get(teamId) ?? 0) + delta)
+  }
+
+  // เขียน balance ทีเดียวต่อทีม รวมทุกขั้น (ค่าปรับ + โบนัสไร้พ่าย + ฉีกสัญญา) กัน batch.update() ทับกันเอง
+  for (const [teamId, delta] of balanceDelta) {
+    const team = teamById.get(teamId)
+    if (!team) continue
+    writes.push((batch) =>
+      batch.update(doc(db, 'leagues', leagueId, 'teams', teamId), {
+        balance: team.balance + delta,
+      }),
+    )
+  }
 
   writes.push((batch) =>
     batch.update(doc(db, 'leagues', leagueId), { status: 'transfer_window' }),
@@ -1023,6 +1078,7 @@ export async function endSeason(leagueId: string): Promise<void> {
       season: league.currentSeason,
       byeMatches: scheduled.length,
       unreportedMatches: unreportedCount,
+      unbeatenChampion: champion && champion.played > 0 && champion.lost === 0 ? champion.teamId : null,
       retiredPlayers: retiredCount,
       tearRequestsResolved: tearWrites.length,
     }),

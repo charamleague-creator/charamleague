@@ -37,6 +37,12 @@ export function shouldRetire(newAge: number, isVeteran: boolean): boolean {
  */
 export const DEFAULT_FORFEIT_PENALTY = 1
 
+/**
+ * โบนัสแชมป์ไร้พ่าย (เอกสารข้อ 5, ขั้น 3) — จ่ายให้ทีมที่จบอันดับ 1 ของฤดูกาล "และ" ไม่แพ้แม้แต่นัดเดียว
+ * (แพ้ = row.lost > 0 จาก standings.ts ซึ่งนับบายที่แพ้ด้วยอยู่แล้ว ไม่ต้องคำนวณซ้ำ) ตั้งค่าได้ต่อลีก
+ */
+export const DEFAULT_UNBEATEN_BONUS = 5
+
 export const AUCTION_TAX_RATE = 0.3
 
 /** ผู้ขายได้รับ = finalPrice x 0.7 (หักภาษี 30%) ปัดทศนิยม 2 ตำแหน่งกันปัญหา floating point */

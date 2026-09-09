@@ -7,6 +7,7 @@ export interface League {
   currentSeason: number
   forfeitPenalty: number
   academy72Limit: number
+  unbeatenBonus: number
 }
 
 export interface Team {
