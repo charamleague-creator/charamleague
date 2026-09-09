@@ -20,6 +20,12 @@ export function sellOffPayout(tag: PlayerTag, isVeteran: boolean): number {
   return TAG_VALUE[tag] + (isVeteran ? VETERAN_TAG_BONUS : 0)
 }
 
+/**
+ * ค่าปรับตอนจบฤดูกาล ถ้ามีนัดที่ "ไม่มีทีมไหนฟอส แต่ไม่ส่งผล" — บังคับเป็น 0-0 double-bye
+ * แล้วปรับเงินทั้ง 2 ทีมเท่ากัน (เอกสารข้อ 5, ขั้น 1) ตั้งค่าได้ต่อลีก ค่าเริ่มต้น 1M/ทีม
+ */
+export const DEFAULT_FORFEIT_PENALTY = 1
+
 export const AUCTION_TAX_RATE = 0.3
 
 /** ผู้ขายได้รับ = finalPrice x 0.7 (หักภาษี 30%) ปัดทศนิยม 2 ตำแหน่งกันปัญหา floating point */

@@ -5,6 +5,7 @@ export interface League {
   name: string
   status: LeagueStatus
   currentSeason: number
+  forfeitPenalty: number
 }
 
 export interface Team {

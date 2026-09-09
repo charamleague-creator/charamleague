@@ -18,6 +18,7 @@ import { buildCurrentAdminLogWrite } from '@/features/adminLog/api'
 import { db } from '@/lib/firebase'
 import { generateRoundRobin } from './fixtures'
 import {
+  DEFAULT_FORFEIT_PENALTY,
   TEAR_BUYER_COST,
   TEAR_ORIGIN_COMPENSATION,
   auctionSellerProceeds,
@@ -72,6 +73,7 @@ function toLeague(snap: QueryDocumentSnapshot<DocumentData>): League {
     name: data.name,
     status: data.status,
     currentSeason: data.currentSeason,
+    forfeitPenalty: data.forfeitPenalty ?? DEFAULT_FORFEIT_PENALTY,
   }
 }
 function toTeam(snap: QueryDocumentSnapshot<DocumentData>): Team {
@@ -583,7 +585,10 @@ export function subscribeSeasonMatches(
   )
 }
 
-export async function createLeague(name: string): Promise<string> {
+export async function createLeague(
+  name: string,
+  forfeitPenalty: number = DEFAULT_FORFEIT_PENALTY,
+): Promise<string> {
   const ref = doc(leaguesCol())
   await commitInChunks([
     (batch) =>
@@ -591,8 +596,9 @@ export async function createLeague(name: string): Promise<string> {
         name,
         status: 'transfer_window' satisfies LeagueStatus,
         currentSeason: 1,
+        forfeitPenalty,
       }),
-    buildCurrentAdminLogWrite('create_league', { leagueId: ref.id, name }),
+    buildCurrentAdminLogWrite('create_league', { leagueId: ref.id, name, forfeitPenalty }),
   ])
   return ref.id
 }
@@ -819,28 +825,78 @@ export async function endSeason(leagueId: string): Promise<void> {
   const teamById = new Map(teamsSnap.docs.map((d) => [d.id, toTeam(d)]))
   const scheduled = scheduledSnap.docs.map(toMatch)
 
-  const unresolved = scheduled.filter((m) => {
-    const home = teamById.get(m.homeTeamId)
-    const away = teamById.get(m.awayTeamId)
-    return !home?.isForfeited && !away?.isForfeited
-  })
-  if (unresolved.length > 0) {
-    throw new Error(
-      `มีนัดที่ยังไม่กรอกผล ${unresolved.length} นัด (ทีมที่แข่งอยู่ปกติ) กรุณากรอกผลให้ครบก่อนจบฤดูกาล`,
-    )
-  }
-
   const writes: Array<(batch: ReturnType<typeof writeBatch>) => void> = []
+  const penaltyDelta = new Map<string, number>()
+  let unreportedCount = 0
+
   for (const m of scheduled) {
     const home = teamById.get(m.homeTeamId)
     const away = teamById.get(m.awayTeamId)
-    let winnerTeamId: string | null = null
-    if (home?.isForfeited && !away?.isForfeited) winnerTeamId = m.awayTeamId
-    else if (away?.isForfeited && !home?.isForfeited) winnerTeamId = m.homeTeamId
+    const homeForfeited = home?.isForfeited ?? false
+    const awayForfeited = away?.isForfeited ?? false
+
+    if (homeForfeited && !awayForfeited) {
+      writes.push((batch) =>
+        batch.update(doc(db, 'leagues', leagueId, 'matches', m.id), {
+          status: 'bye',
+          winnerTeamId: m.awayTeamId,
+        }),
+      )
+    } else if (awayForfeited && !homeForfeited) {
+      writes.push((batch) =>
+        batch.update(doc(db, 'leagues', leagueId, 'matches', m.id), {
+          status: 'bye',
+          winnerTeamId: m.homeTeamId,
+        }),
+      )
+    } else if (!homeForfeited && !awayForfeited) {
+      // ไม่มีทีมไหนฟอส แต่ไม่ส่งผล — บังคับเป็น 0-0 double-bye + ปรับเงินทั้ง 2 ทีม (เอกสารข้อ 5, ขั้น 1)
+      unreportedCount++
+      writes.push((batch) =>
+        batch.update(doc(db, 'leagues', leagueId, 'matches', m.id), {
+          status: 'bye',
+          winnerTeamId: null,
+          homeScore: 0,
+          awayScore: 0,
+        }),
+      )
+      penaltyDelta.set(m.homeTeamId, (penaltyDelta.get(m.homeTeamId) ?? 0) + league.forfeitPenalty)
+      penaltyDelta.set(m.awayTeamId, (penaltyDelta.get(m.awayTeamId) ?? 0) + league.forfeitPenalty)
+      writes.push((batch) =>
+        batch.set(doc(transactionsCol(leagueId, m.homeTeamId)), {
+          type: 'expense',
+          category: 'forfeit_penalty',
+          desc: `ไม่ส่งผลนัดที่ ${m.matchday} กับ ${away?.name ?? m.awayTeamId}`,
+          amount: league.forfeitPenalty,
+          season: league.currentSeason,
+        }),
+      )
+      writes.push((batch) =>
+        batch.set(doc(transactionsCol(leagueId, m.awayTeamId)), {
+          type: 'expense',
+          category: 'forfeit_penalty',
+          desc: `ไม่ส่งผลนัดที่ ${m.matchday} กับ ${home?.name ?? m.homeTeamId}`,
+          amount: league.forfeitPenalty,
+          season: league.currentSeason,
+        }),
+      )
+    } else {
+      // ทั้งสองทีมฟอสพร้อมกัน — ไม่มีผู้ชนะ ไม่ปรับเงินซ้ำ (แต่ละทีมฟอสเสียแค่แข่งแพ้บายอื่นๆอยู่แล้ว)
+      writes.push((batch) =>
+        batch.update(doc(db, 'leagues', leagueId, 'matches', m.id), {
+          status: 'bye',
+          winnerTeamId: null,
+        }),
+      )
+    }
+  }
+
+  for (const [teamId, delta] of penaltyDelta) {
+    const team = teamById.get(teamId)
+    if (!team) continue
     writes.push((batch) =>
-      batch.update(doc(db, 'leagues', leagueId, 'matches', m.id), {
-        status: 'bye',
-        winnerTeamId,
+      batch.update(doc(db, 'leagues', leagueId, 'teams', teamId), {
+        balance: team.balance - delta,
       }),
     )
   }
@@ -856,6 +912,7 @@ export async function endSeason(leagueId: string): Promise<void> {
       leagueId,
       season: league.currentSeason,
       byeMatches: scheduled.length,
+      unreportedMatches: unreportedCount,
       tearRequestsResolved: tearWrites.length,
     }),
   )
