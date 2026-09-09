@@ -147,6 +147,12 @@ service cloud.firestore {
       allow update, delete: if false;
     }
 
+    // Phase 01 ข้อ 6: แจ้งเวอร์ชันใหม่ — client ทุกคนอ่านได้ (แม้ไม่ login ก็เช็คได้) แก้ได้เฉพาะ admin
+    match /system/{docId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
     // deny-by-default: path ที่ไม่ได้ match ข้างบนจะถูกปฏิเสธเสมอ
     match /{document=**} {
       allow read, write: if false;

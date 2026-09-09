@@ -574,6 +574,31 @@ export function subscribeTeams(leagueId: string, onChange: (teams: Team[]) => vo
   return onSnapshot(teamsCol(leagueId), (snap) => onChange(snap.docs.map(toTeam)))
 }
 
+export interface TeamPickerEntry {
+  leagueId: string
+  leagueName: string
+  teamId: string
+  teamName: string
+}
+
+/** ใช้แค่หน้า login — ให้ผู้จัดการทีมเลือกทีมตัวเองจากทุกลีก (ทีม/ลีก read: true อยู่แล้ว) */
+export async function listAllTeamsForLogin(): Promise<TeamPickerEntry[]> {
+  const leaguesSnap = await getDocs(leaguesCol())
+  const leagues = leaguesSnap.docs.map(toLeague)
+  const perLeague = await Promise.all(
+    leagues.map(async (league) => {
+      const teamsSnap = await getDocs(teamsCol(league.id))
+      return teamsSnap.docs.map(toTeam).map((team) => ({
+        leagueId: league.id,
+        leagueName: league.name,
+        teamId: team.id,
+        teamName: team.name,
+      }))
+    }),
+  )
+  return perLeague.flat()
+}
+
 export function subscribeSeasonMatches(
   leagueId: string,
   season: number,

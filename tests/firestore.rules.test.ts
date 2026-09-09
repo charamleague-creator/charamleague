@@ -815,6 +815,27 @@ describe('adminActivityLog/{logId}', () => {
   })
 })
 
+describe('system/{docId} — แจ้งเวอร์ชันใหม่', () => {
+  it('อ่านได้แม้ไม่ login', async () => {
+    const unauth = testEnv.unauthenticatedContext()
+    await assertSucceeds(getDoc(doc(unauth.firestore(), 'system/appVersion')))
+  })
+
+  it('manager เขียนไม่ได้', async () => {
+    const manager = testEnv.authenticatedContext('manager-1', { role: 'manager' })
+    await assertFails(
+      setDoc(doc(manager.firestore(), 'system/appVersion'), { updatedAt: new Date() }),
+    )
+  })
+
+  it('admin เขียนได้', async () => {
+    const admin = testEnv.authenticatedContext('admin-1', { role: 'admin' })
+    await assertSucceeds(
+      setDoc(doc(admin.firestore(), 'system/appVersion'), { updatedAt: new Date() }),
+    )
+  })
+})
+
 describe('deny-by-default', () => {
   it('collection ที่ไม่ได้กำหนด rule ไว้ ต้องถูกปฏิเสธเสมอ', async () => {
     const admin = testEnv.authenticatedContext('admin-1', { role: 'admin' })

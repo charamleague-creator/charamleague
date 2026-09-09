@@ -1,6 +1,7 @@
 import { lazy, Suspense } from 'react'
 import { BrowserRouter, Route, Routes } from 'react-router-dom'
 import { ProtectedRoute } from '@/components/ProtectedRoute'
+import { VersionBanner } from '@/components/VersionBanner'
 import { AuthProvider } from '@/features/auth/AuthContext'
 
 const LoginPage = lazy(() => import('@/pages/LoginPage'))
@@ -17,6 +18,7 @@ export default function App() {
   return (
     <AuthProvider>
       <BrowserRouter>
+        <VersionBanner />
         <Suspense fallback={null}>
           <Routes>
             <Route path="/login" element={<LoginPage />} />
