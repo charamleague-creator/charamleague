@@ -2,17 +2,23 @@ import { type FormEvent, useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { reportCupMatchResult, subscribeCupMatches, subscribeCups } from '@/features/cups/api'
 import type { Cup, CupMatch } from '@/features/cups/types'
-import { subscribeTeams } from '@/features/leagues/api'
-import type { Team } from '@/features/leagues/types'
+import { subscribeLeague, subscribeTeams } from '@/features/leagues/api'
+import type { League, Team } from '@/features/leagues/types'
 import { useAuth } from '@/hooks/useAuth'
 
 export default function CupDetailPage() {
   const { leagueId, cupId } = useParams<{ leagueId: string; cupId: string }>()
   const { role } = useAuth()
+  const [league, setLeague] = useState<League | null>(null)
   const [cups, setCups] = useState<Cup[]>([])
   const [matches, setMatches] = useState<CupMatch[]>([])
   const [teams, setTeams] = useState<Team[]>([])
   const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!leagueId) return
+    return subscribeLeague(leagueId, setLeague)
+  }, [leagueId])
 
   useEffect(() => {
     if (!leagueId) return
@@ -50,6 +56,9 @@ export default function CupDetailPage() {
     <main style={{ maxWidth: 800, margin: '2rem auto' }}>
       <h1>{cup?.name ?? 'ถ้วย'}</h1>
       <p>สถานะ: {cup?.status === 'completed' ? 'จบแล้ว' : 'กำลังแข่ง'}</p>
+      {league && league.status !== 'in_season' && (
+        <p role="alert">รายงาน/แก้ผลบอลถ้วยได้เฉพาะตอนลีกกำลังแข่งขันเท่านั้น (ตอนนี้ตลาดเปิดอยู่)</p>
+      )}
       {error && <p role="alert">{error}</p>}
       {Array.from({ length: numRounds }, (_, i) => i + 1).map((round) => (
         <div key={round}>
@@ -64,7 +73,9 @@ export default function CupDetailPage() {
                   {m.status === 'played' && `${m.homeScore} - ${m.awayScore}`}
                   {m.status === 'bye' && 'บาย'}
                   {m.status === 'pending' && 'รอทีม'}
-                  {(m.status === 'scheduled' || m.status === 'played') && role === 'admin' && (
+                  {(m.status === 'scheduled' || m.status === 'played') &&
+                    role === 'admin' &&
+                    league?.status === 'in_season' && (
                     <CupScoreForm
                       key={`${m.round}_${m.slot}_${m.homeScore}_${m.awayScore}`}
                       initialHome={m.homeScore}
