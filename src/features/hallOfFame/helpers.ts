@@ -12,6 +12,32 @@ export function isFirstChampionshipForManager(
   return !existingEntries.some((e) => e.managerUid === managerUid && e.category === category)
 }
 
+/**
+ * "เจ้าแห่งความสำเร็จ" ต่อประเภท (เอกสาร phase 06, หน้าจอ #2) — คนที่แชมป์ประเภทนั้นมากที่สุด
+ * ถ้าเสมอกัน คืนทุกคนที่เสมอ ไม่เลือกใครคนเดียวมั่วๆ — ไม่คืนอะไรถ้ายังไม่มีใครได้แชมป์ประเภทนั้นเลย (max 0)
+ */
+export function getCategoryLeaders(
+  entries: HallOfFameEntry[],
+): Map<ChampionCategory, Array<{ managerUid: string; managerName: string; count: number }>> {
+  const byManager = countChampionshipsByManager(entries)
+  const result = new Map<ChampionCategory, Array<{ managerUid: string; managerName: string; count: number }>>()
+
+  const categories = new Set(entries.map((e) => e.category))
+  for (const category of categories) {
+    let max = 0
+    for (const info of byManager.values()) {
+      const count = info.byCategory.get(category) ?? 0
+      if (count > max) max = count
+    }
+    if (max === 0) continue
+    const leaders = Array.from(byManager.entries())
+      .filter(([, info]) => (info.byCategory.get(category) ?? 0) === max)
+      .map(([managerUid, info]) => ({ managerUid, managerName: info.managerName, count: max }))
+    result.set(category, leaders)
+  }
+  return result
+}
+
 export function countChampionshipsByManager(
   entries: HallOfFameEntry[],
 ): Map<string, { managerName: string; total: number; byCategory: Map<ChampionCategory, number> }> {

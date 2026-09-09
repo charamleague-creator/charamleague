@@ -15,6 +15,7 @@ import {
   subscribeSeasonMatches,
   subscribeTeams,
   subscribeTearRequests,
+  updateTeam,
 } from '@/features/leagues/api'
 import { computeStandings } from '@/features/leagues/standings'
 import type { AuctionListing, League, Match, Team, TearRequest } from '@/features/leagues/types'
@@ -258,6 +259,10 @@ export default function LeagueDetailPage() {
                   />
                   ฟอส
                 </label>
+                <EditTeamForm
+                  team={team}
+                  onSubmit={(input) => run(() => updateTeam(leagueId, team.id, input))}
+                />
               </li>
             ))}
           </ul>
@@ -267,6 +272,55 @@ export default function LeagueDetailPage() {
         </section>
       )}
     </main>
+  )
+}
+
+function EditTeamForm({
+  team,
+  onSubmit,
+}: {
+  team: Team
+  onSubmit: (input: { name: string; managerUid: string; managerName: string }) => void
+}) {
+  const [editing, setEditing] = useState(false)
+  const [name, setName] = useState(team.name)
+  const [managerUid, setManagerUid] = useState(team.managerUid)
+  const [managerName, setManagerName] = useState(team.managerName)
+
+  if (!editing) {
+    return (
+      <button type="button" onClick={() => setEditing(true)}>
+        แก้ไข
+      </button>
+    )
+  }
+
+  function handleSubmit(e: FormEvent) {
+    e.preventDefault()
+    onSubmit({ name, managerUid, managerName })
+    setEditing(false)
+  }
+
+  return (
+    <form onSubmit={handleSubmit} style={{ display: 'inline' }}>
+      <input placeholder="ชื่อทีม" value={name} onChange={(e) => setName(e.target.value)} required />
+      <input
+        placeholder="Manager UID"
+        value={managerUid}
+        onChange={(e) => setManagerUid(e.target.value)}
+        required
+      />
+      <input
+        placeholder="ชื่อผู้จัดการทีม"
+        value={managerName}
+        onChange={(e) => setManagerName(e.target.value)}
+        required
+      />
+      <button type="submit">บันทึก</button>
+      <button type="button" onClick={() => setEditing(false)}>
+        ยกเลิก
+      </button>
+    </form>
   )
 }
 

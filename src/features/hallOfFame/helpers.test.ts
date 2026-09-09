@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { countChampionshipsByManager, isFirstChampionshipForManager } from './helpers'
+import { countChampionshipsByManager, getCategoryLeaders, isFirstChampionshipForManager } from './helpers'
 import type { HallOfFameEntry } from './types'
 
 function entry(overrides: Partial<HallOfFameEntry>): HallOfFameEntry {
@@ -56,5 +56,35 @@ describe('countChampionshipsByManager', () => {
     ]
     const result = countChampionshipsByManager(entries)
     expect(result.get('m1')?.byCategory.get('league_primary')).toBe(2)
+  })
+})
+
+describe('getCategoryLeaders', () => {
+  it('คืนคนเดียวถ้ามีคนนำเพียงคนเดียว', () => {
+    const entries = [
+      entry({ managerUid: 'm1', category: 'league_primary' }),
+      entry({ managerUid: 'm1', category: 'league_primary' }),
+      entry({ managerUid: 'm2', category: 'league_primary' }),
+    ]
+    const leaders = getCategoryLeaders(entries)
+    expect(leaders.get('league_primary')).toEqual([
+      { managerUid: 'm1', managerName: 'Manager 1', count: 2 },
+    ])
+  })
+
+  it('เสมอกัน คืนทุกคนที่เสมอ ไม่เลือกใครคนเดียว', () => {
+    const entries = [
+      entry({ managerUid: 'm1', category: 'cup_major' }),
+      entry({ managerUid: 'm2', category: 'cup_major' }),
+    ]
+    const leaders = getCategoryLeaders(entries)
+    const uids = leaders.get('cup_major')?.map((l) => l.managerUid).sort()
+    expect(uids).toEqual(['m1', 'm2'])
+  })
+
+  it('ประเภทที่ยังไม่มีใครได้แชมป์เลย ไม่ปรากฏในผลลัพธ์', () => {
+    const entries = [entry({ managerUid: 'm1', category: 'league_primary' })]
+    const leaders = getCategoryLeaders(entries)
+    expect(leaders.has('world_cup')).toBe(false)
   })
 })

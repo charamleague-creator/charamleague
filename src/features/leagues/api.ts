@@ -586,9 +586,14 @@ export interface TeamPickerEntry {
   leagueName: string
   teamId: string
   teamName: string
+  managerUid: string
+  managerName: string
 }
 
-/** ใช้แค่หน้า login — ให้ผู้จัดการทีมเลือกทีมตัวเองจากทุกลีก (ทีม/ลีก read: true อยู่แล้ว) */
+/**
+ * ทีม+ลีกทั้งหมดในระบบ ข้ามทุกลีก (ทีม/ลีก read: true อยู่แล้ว) — ใช้ทั้งหน้า login (เลือกทีมตัวเอง)
+ * และหอเกียรติยศ (ค้นหาสดว่าผู้จัดการทีมคนนี้ตอนนี้คุมทีมไหนอยู่ เอกสาร phase 06)
+ */
 export async function listAllTeamsForLogin(): Promise<TeamPickerEntry[]> {
   const leaguesSnap = await getDocs(leaguesCol())
   const leagues = leaguesSnap.docs.map(toLeague)
@@ -600,6 +605,8 @@ export async function listAllTeamsForLogin(): Promise<TeamPickerEntry[]> {
         leagueName: league.name,
         teamId: team.id,
         teamName: team.name,
+        managerUid: team.managerUid,
+        managerName: team.managerName,
       }))
     }),
   )
@@ -675,6 +682,22 @@ export async function createTeam(
     lineupSubmitted: false,
     lineupApproved: false,
   })
+}
+
+/**
+ * แอดมินแก้ไขชื่อทีม/ผู้จัดการทีมได้ (เอกสาร phase 02 ข้อ 2: "แอดมินเพิ่ม/แก้ไข/ลบทีมได้")
+ * เช่นตอนผู้จัดการทีมย้ายไปคุมทีมอื่น — ประวัติหอเกียรติยศที่บันทึกไปแล้วจะไม่เปลี่ยนตาม
+ * (เป็น snapshot คงที่ ดู features/hallOfFame) มีผลแค่กับทีม/การค้นหาทีมปัจจุบันเท่านั้น
+ */
+export async function updateTeam(
+  leagueId: string,
+  teamId: string,
+  input: { name: string; managerUid: string; managerName: string },
+): Promise<void> {
+  await commitInChunks([
+    (batch) => batch.update(doc(db, 'leagues', leagueId, 'teams', teamId), input),
+    buildCurrentAdminLogWrite('update_team', { leagueId, teamId, ...input }),
+  ])
 }
 
 /**

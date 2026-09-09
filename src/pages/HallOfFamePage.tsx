@@ -1,9 +1,9 @@
 import { type FormEvent, useEffect, useState } from 'react'
 import { addHallOfFameEntry, removeHallOfFameEntry, subscribeHallOfFame } from '@/features/hallOfFame/api'
-import { countChampionshipsByManager } from '@/features/hallOfFame/helpers'
+import { countChampionshipsByManager, getCategoryLeaders } from '@/features/hallOfFame/helpers'
 import { CHAMPION_CATEGORY_LABELS, type ChampionCategory, type HallOfFameEntry } from '@/features/hallOfFame/types'
-import { subscribeLeagues, subscribeTeams } from '@/features/leagues/api'
-import type { League, Team } from '@/features/leagues/types'
+import { listAllTeamsForLogin, subscribeLeagues, type TeamPickerEntry } from '@/features/leagues/api'
+import type { League } from '@/features/leagues/types'
 import { useAuth } from '@/hooks/useAuth'
 
 const CATEGORIES = Object.keys(CHAMPION_CATEGORY_LABELS) as ChampionCategory[]
@@ -12,15 +12,29 @@ export default function HallOfFamePage() {
   const { role } = useAuth()
   const [entries, setEntries] = useState<HallOfFameEntry[]>([])
   const [leagues, setLeagues] = useState<League[]>([])
+  const [allTeams, setAllTeams] = useState<TeamPickerEntry[]>([])
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
 
   useEffect(() => subscribeHallOfFame(setEntries), [])
   useEffect(() => subscribeLeagues(setLeagues), [])
 
+  useEffect(() => {
+    listAllTeamsForLogin()
+      .then(setAllTeams)
+      .catch(() => setAllTeams([]))
+  }, [entries])
+
   const leaderboard = Array.from(countChampionshipsByManager(entries).entries()).sort(
     (a, b) => b[1].total - a[1].total,
   )
+  const categoryLeaders = getCategoryLeaders(entries)
+
+  // เอกสาร phase 06: ตารางเกียรติยศต้องโชว์ทีมปัจจุบันของผู้จัดการทีมคนนั้น (ค้นหาสด ไม่ใช่ snapshot)
+  // ถ้าไม่ได้คุมทีมไหนอยู่แล้ว ให้แสดงชื่อเฉยๆ ไม่ซ่อนแถวไปเลย
+  function currentTeamFor(managerUid: string) {
+    return allTeams.find((t) => t.managerUid === managerUid)
+  }
 
   async function handleAdd(input: Parameters<typeof addHallOfFameEntry>[0]) {
     setError(null)
@@ -50,18 +64,38 @@ export default function HallOfFamePage() {
       {error && <p role="alert">{error}</p>}
       {notice && <p>{notice}</p>}
 
-      <h2>สรุปแชมป์ตามผู้จัดการทีม</h2>
+      <h2>เจ้าแห่งความสำเร็จ</h2>
+      <ul>
+        {CATEGORIES.map((category) => {
+          const leaders = categoryLeaders.get(category)
+          if (!leaders || leaders.length === 0) return null
+          return (
+            <li key={category}>
+              <strong>{CHAMPION_CATEGORY_LABELS[category]}</strong> ({leaders[0].count} แชมป์): {' '}
+              {leaders.map((l) => l.managerName).join(', ')}
+            </li>
+          )
+        })}
+      </ul>
+
+      <h2>ตารางเกียรติยศ</h2>
       <ul>
         {leaderboard.length === 0 && <li>ยังไม่มีข้อมูล</li>}
-        {leaderboard.map(([managerUid, info]) => (
-          <li key={managerUid}>
-            {info.managerName} — {info.total} แชมป์ (
-            {Array.from(info.byCategory.entries())
-              .map(([cat, count]) => `${CHAMPION_CATEGORY_LABELS[cat]} x${count}`)
-              .join(', ')}
-            )
-          </li>
-        ))}
+        {leaderboard.map(([managerUid, info]) => {
+          const currentTeam = currentTeamFor(managerUid)
+          return (
+            <li key={managerUid}>
+              {info.managerName}
+              {currentTeam ? ` (${currentTeam.teamName} — ${currentTeam.leagueName})` : ' (ไม่ได้คุมทีมในระบบแล้ว)'}
+              {' — '}
+              {info.total} แชมป์ (
+              {Array.from(info.byCategory.entries())
+                .map(([cat, count]) => `${CHAMPION_CATEGORY_LABELS[cat]} x${count}`)
+                .join(', ')}
+              )
+            </li>
+          )
+        })}
       </ul>
 
       <h2>ประวัติทั้งหมด</h2>
@@ -97,51 +131,47 @@ function AddEntryForm({
   const [category, setCategory] = useState<ChampionCategory>('league_primary')
   const [season, setSeason] = useState('')
   const [leagueId, setLeagueId] = useState('')
-  const [teams, setTeams] = useState<Team[]>([])
+  const [teams, setTeams] = useState<TeamPickerEntry[]>([])
   const [teamId, setTeamId] = useState('')
-  const [teamName, setTeamName] = useState('')
-  const [managerUid, setManagerUid] = useState('')
-  const [managerName, setManagerName] = useState('')
 
   useEffect(() => {
     if (!leagueId) {
       setTeams([])
+      setTeamId('')
       return
     }
-    return subscribeTeams(leagueId, setTeams)
+    listAllTeamsForLogin()
+      .then((all) => setTeams(all.filter((t) => t.leagueId === leagueId)))
+      .catch(() => setTeams([]))
+    setTeamId('')
   }, [leagueId])
 
-  function handlePickTeam(id: string) {
-    setTeamId(id)
-    const team = teams.find((t) => t.id === id)
-    if (team) {
-      setTeamName(team.name)
-      setManagerUid(team.managerUid)
-      setManagerName(team.managerName)
-    }
-  }
+  const selectedTeam = teams.find((t) => t.teamId === teamId)
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault()
+    if (!selectedTeam) return
     onSubmit({
       category,
       season: Number(season),
-      leagueId: leagueId || null,
-      teamId: teamId || null,
-      teamName,
-      managerUid,
-      managerName,
+      leagueId,
+      teamId: selectedTeam.teamId,
+      teamName: selectedTeam.teamName,
+      managerUid: selectedTeam.managerUid,
+      managerName: selectedTeam.managerName,
     })
     setSeason('')
     setTeamId('')
-    setTeamName('')
-    setManagerUid('')
-    setManagerName('')
   }
 
   return (
     <form onSubmit={handleSubmit}>
       <h2>เพิ่มแชมป์ (รองรับกรอกย้อนหลัง)</h2>
+      <p>
+        <small>
+          เลือกทีมจาก dropdown เท่านั้น — ระบบดึงชื่อผู้จัดการทีมของทีมนั้นให้อัตโนมัติ กันพิมพ์ชื่อผิด/ไม่ตรงกับของจริง
+        </small>
+      </p>
       <select value={category} onChange={(e) => setCategory(e.target.value as ChampionCategory)}>
         {CATEGORIES.map((c) => (
           <option key={c} value={c}>
@@ -156,43 +186,25 @@ function AddEntryForm({
         onChange={(e) => setSeason(e.target.value)}
         required
       />
-      <select value={leagueId} onChange={(e) => setLeagueId(e.target.value)}>
-        <option value="">— เลือกลีก (ถ้ามี) —</option>
+      <select value={leagueId} onChange={(e) => setLeagueId(e.target.value)} required>
+        <option value="">— เลือกลีก —</option>
         {leagues.map((l) => (
           <option key={l.id} value={l.id}>
             {l.name}
           </option>
         ))}
       </select>
-      {teams.length > 0 && (
-        <select value={teamId} onChange={(e) => handlePickTeam(e.target.value)}>
-          <option value="">— เลือกทีม (ดึงชื่อผู้จัดการทีมอัตโนมัติ) —</option>
-          {teams.map((t) => (
-            <option key={t.id} value={t.id}>
-              {t.name}
-            </option>
-          ))}
-        </select>
-      )}
-      <input
-        placeholder="ชื่อทีม"
-        value={teamName}
-        onChange={(e) => setTeamName(e.target.value)}
-        required
-      />
-      <input
-        placeholder="Manager UID"
-        value={managerUid}
-        onChange={(e) => setManagerUid(e.target.value)}
-        required
-      />
-      <input
-        placeholder="ชื่อผู้จัดการทีม"
-        value={managerName}
-        onChange={(e) => setManagerName(e.target.value)}
-        required
-      />
-      <button type="submit">บันทึกแชมป์</button>
+      <select value={teamId} onChange={(e) => setTeamId(e.target.value)} required disabled={!leagueId}>
+        <option value="">— เลือกทีม —</option>
+        {teams.map((t) => (
+          <option key={t.teamId} value={t.teamId}>
+            {t.teamName}
+          </option>
+        ))}
+      </select>
+      <button type="submit" disabled={!selectedTeam || !season}>
+        บันทึกแชมป์
+      </button>
     </form>
   )
 }
