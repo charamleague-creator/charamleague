@@ -672,6 +672,22 @@ details summary {
   border-color: var(--danger-border);
 }
 
+/* ---- standings table (League Table page) ---- */
+.table-scroll {
+  overflow-x: auto;
+}
+.standings-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+.standings-table__row--me td {
+  background: var(--accent-bg);
+}
+.standings-table__row--me td:first-child {
+  border-left: 2px solid var(--accent);
+}
+
 /* ---- skeleton (Skeleton component) ---- */
 .skeleton {
   background: linear-gradient(

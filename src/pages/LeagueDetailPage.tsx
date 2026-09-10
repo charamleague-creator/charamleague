@@ -36,6 +36,7 @@ import { Card, CardBody, CardHeader } from '@/components/ui/Card'
 import { Modal, ModalActions } from '@/components/ui/Modal'
 import { Tabs, type TabItem } from '@/components/ui/Tabs'
 import { useToast } from '@/components/ui/Toast'
+import { StandingsTable } from '@/components/league/StandingsTable'
 import { useAuth } from '@/hooks/useAuth'
 
 const AUCTION_STATUS_LABEL: Record<AuctionListingStatus, string> = {
@@ -228,43 +229,13 @@ export default function LeagueDetailPage() {
       <Tabs tabs={tabs} activeId={activeTab} onChange={setActiveTab} />
 
       {activeTab === 'table' && (
-        <table>
-          <thead>
-            <tr>
-              <th>ทีม</th>
-              <th>แข่ง</th>
-              <th>ชนะ</th>
-              <th>เสมอ</th>
-              <th>แพ้</th>
-              <th>+/-</th>
-              <th>แต้ม</th>
-              <th>ฟอร์ม</th>
-            </tr>
-          </thead>
-          <tbody>
-            {standings.map((row) => (
-              <tr key={row.teamId}>
-                <td>
-                  <Link to={`/leagues/${leagueId}/teams/${row.teamId}`}>{row.teamName}</Link>{' '}
-                  {teamsById.get(row.teamId)?.isForfeited && <Badge tone="neutral">ฟอส</Badge>}
-                </td>
-                <td>{row.played}</td>
-                <td>{row.won}</td>
-                <td>{row.drawn}</td>
-                <td>{row.lost}</td>
-                <td>{row.goalDifference}</td>
-                <td>{row.points}</td>
-                <td>
-                  <span className="form-dots">
-                    {last5Form(row.teamId).map((result, i) => (
-                      <span key={i} className={`form-dot form-dot--${result}`} title={result} />
-                    ))}
-                  </span>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <StandingsTable
+          leagueId={leagueId}
+          standings={standings}
+          teamsById={teamsById}
+          myTeamId={myTeam?.id}
+          last5Form={last5Form}
+        />
       )}
 
       {activeTab === 'fixtures' && (
