@@ -19,14 +19,57 @@ import {
   updateTeam,
 } from '@/features/leagues/api'
 import { computeStandings } from '@/features/leagues/standings'
-import type { AuctionListing, League, Match, Team, TearRequest } from '@/features/leagues/types'
+import type {
+  AuctionListing,
+  AuctionListingStatus,
+  League,
+  Match,
+  Team,
+  TearRequest,
+  TearRequestStatus,
+} from '@/features/leagues/types'
 import { createCup, subscribeCups } from '@/features/cups/api'
 import type { Cup, CupType } from '@/features/cups/types'
+import { Badge } from '@/components/ui/Badge'
+import { Button } from '@/components/ui/Button'
+import { Card, CardBody, CardHeader } from '@/components/ui/Card'
+import { Modal, ModalActions } from '@/components/ui/Modal'
+import { Tabs, type TabItem } from '@/components/ui/Tabs'
+import { useToast } from '@/components/ui/Toast'
 import { useAuth } from '@/hooks/useAuth'
+
+const AUCTION_STATUS_LABEL: Record<AuctionListingStatus, string> = {
+  pending_approval: 'รออนุมัติ',
+  open: 'เปิดประมูล',
+  closed: 'ปิดแล้ว',
+  closed_no_winner: 'ปิด (ไม่มีผู้ชนะ)',
+  rejected: 'ถูกปฏิเสธ',
+}
+const AUCTION_STATUS_TONE: Record<AuctionListingStatus, 'success' | 'warning' | 'danger' | 'neutral' | 'accent'> = {
+  pending_approval: 'warning',
+  open: 'accent',
+  closed: 'success',
+  closed_no_winner: 'neutral',
+  rejected: 'danger',
+}
+
+const TEAR_STATUS_LABEL: Record<TearRequestStatus, string> = {
+  pending: 'รอผล',
+  success: 'สำเร็จ',
+  failed_insufficient_funds: 'ไม่สำเร็จ (เงินไม่พอ)',
+  failed_outbid: 'ไม่สำเร็จ (ถูกแซง)',
+}
+const TEAR_STATUS_TONE: Record<TearRequestStatus, 'success' | 'warning' | 'danger'> = {
+  pending: 'warning',
+  success: 'success',
+  failed_insufficient_funds: 'danger',
+  failed_outbid: 'danger',
+}
 
 export default function LeagueDetailPage() {
   const { leagueId } = useParams<{ leagueId: string }>()
   const { user, role } = useAuth()
+  const toast = useToast()
   const [league, setLeague] = useState<League | null>(null)
   const [teams, setTeams] = useState<Team[]>([])
   const [matches, setMatches] = useState<Match[]>([])
@@ -34,6 +77,8 @@ export default function LeagueDetailPage() {
   const [tearRequests, setTearRequests] = useState<TearRequest[]>([])
   const [cups, setCups] = useState<Cup[]>([])
   const [error, setError] = useState<string | null>(null)
+  const [confirmEndSeason, setConfirmEndSeason] = useState(false)
+  const [activeTab, setActiveTab] = useState('table')
 
   useEffect(() => {
     if (!leagueId) return
@@ -97,12 +142,25 @@ export default function LeagueDetailPage() {
     }
   }
 
+  const tabs: TabItem[] = [
+    { id: 'table', label: 'ตารางคะแนน' },
+    { id: 'fixtures', label: 'นัดแข่ง' },
+    { id: 'market', label: 'ตลาดซื้อขาย' },
+    { id: 'cups', label: 'ถ้วย' },
+    ...(role === 'admin' ? [{ id: 'teams', label: 'ทีม' }] : []),
+    ...(role === 'admin' ? [{ id: 'settings', label: 'ตั้งค่า' }] : []),
+  ]
+
   return (
     <main style={{ maxWidth: 900, margin: '2rem auto' }}>
-      <h1>
-        {league.name} — ฤดูกาล {league.currentSeason}
-      </h1>
-      <p>สถานะ: {league.status === 'in_season' ? 'กำลังแข่งขัน' : 'ตลาดเปิด'}</p>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <h1 style={{ margin: 0 }}>
+          {league.name} — ฤดูกาล {league.currentSeason}
+        </h1>
+        <Badge tone={league.status === 'in_season' ? 'success' : 'warning'}>
+          {league.status === 'in_season' ? 'กำลังแข่งขัน' : 'ตลาดเปิด'}
+        </Badge>
+      </div>
       {error && <p role="alert">{error}</p>}
 
       <div className="stat-grid">
@@ -116,7 +174,7 @@ export default function LeagueDetailPage() {
           </div>
         </div>
         <div className="stat-card">
-          <div className="stat-card__icon" style={{ background: 'rgba(34, 197, 94, 0.15)', color: 'var(--success)' }}>
+          <div className="stat-card__icon" style={{ background: 'var(--success-bg)', color: 'var(--success)' }}>
             📅
           </div>
           <div>
@@ -125,7 +183,7 @@ export default function LeagueDetailPage() {
           </div>
         </div>
         <div className="stat-card">
-          <div className="stat-card__icon" style={{ background: 'rgba(242, 193, 78, 0.15)', color: 'var(--gold)' }}>
+          <div className="stat-card__icon" style={{ background: 'var(--gold-bg)', color: 'var(--gold)' }}>
             ⚽
           </div>
           <div>
@@ -138,170 +196,205 @@ export default function LeagueDetailPage() {
       {role === 'admin' && (
         <section>
           {league.status === 'in_season' ? (
-            <button type="button" onClick={() => run(() => endSeason(leagueId))}>
+            <Button variant="danger" onClick={() => setConfirmEndSeason(true)}>
               จบฤดูกาล
-            </button>
+            </Button>
           ) : (
-            <button type="button" onClick={() => run(() => startNewSeason(leagueId))}>
+            <Button variant="primary" onClick={() => run(() => startNewSeason(leagueId))}>
               เริ่มฤดูกาลใหม่
-            </button>
+            </Button>
           )}
         </section>
       )}
 
-      {role === 'admin' && (
-        <LeagueSettingsForm
-          league={league}
-          onSubmit={(settings) => run(() => updateLeagueSettings(leagueId, settings))}
-        />
-      )}
+      <Modal open={confirmEndSeason} onClose={() => setConfirmEndSeason(false)} title="ยืนยันจบฤดูกาล">
+        การจบฤดูกาลจะคำนวณรางวัล/ค่าปรับและล็อกผลของฤดูกาลนี้ ย้อนกลับไม่ได้ ยืนยันหรือไม่?
+        <ModalActions>
+          <Button variant="ghost" onClick={() => setConfirmEndSeason(false)}>
+            ยกเลิก
+          </Button>
+          <Button
+            variant="danger"
+            onClick={async () => {
+              setConfirmEndSeason(false)
+              await run(() => endSeason(leagueId))
+            }}
+          >
+            ยืนยันจบฤดูกาล
+          </Button>
+        </ModalActions>
+      </Modal>
 
-      <h2>ตารางคะแนน</h2>
-      <table>
-        <thead>
-          <tr>
-            <th>ทีม</th>
-            <th>แข่ง</th>
-            <th>ชนะ</th>
-            <th>เสมอ</th>
-            <th>แพ้</th>
-            <th>+/-</th>
-            <th>แต้ม</th>
-            <th>ฟอร์ม</th>
-          </tr>
-        </thead>
-        <tbody>
-          {standings.map((row) => (
-            <tr key={row.teamId}>
-              <td>
-                <Link to={`/leagues/${leagueId}/teams/${row.teamId}`}>{row.teamName}</Link>
-                {teamsById.get(row.teamId)?.isForfeited && ' (ฟอส)'}
-              </td>
-              <td>{row.played}</td>
-              <td>{row.won}</td>
-              <td>{row.drawn}</td>
-              <td>{row.lost}</td>
-              <td>{row.goalDifference}</td>
-              <td>{row.points}</td>
-              <td>
-                <span className="form-dots">
-                  {last5Form(row.teamId).map((result, i) => (
-                    <span key={i} className={`form-dot form-dot--${result}`} title={result} />
-                  ))}
-                </span>
-              </td>
+      <Tabs tabs={tabs} activeId={activeTab} onChange={setActiveTab} />
+
+      {activeTab === 'table' && (
+        <table>
+          <thead>
+            <tr>
+              <th>ทีม</th>
+              <th>แข่ง</th>
+              <th>ชนะ</th>
+              <th>เสมอ</th>
+              <th>แพ้</th>
+              <th>+/-</th>
+              <th>แต้ม</th>
+              <th>ฟอร์ม</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
-
-      <h2>ตารางแข่ง</h2>
-      <ul>
-        {matches.map((match) => (
-          <li key={match.id}>
-            นัดที่ {match.matchday}: {teamsById.get(match.homeTeamId)?.name ?? match.homeTeamId} vs{' '}
-            {teamsById.get(match.awayTeamId)?.name ?? match.awayTeamId} —{' '}
-            {match.status === 'played' && `${match.homeScore} - ${match.awayScore}`}
-            {match.status === 'bye' && 'บาย'}
-            {match.status === 'scheduled' &&
-              (role === 'admin' || (user && match.involvedManagerUids.includes(user.uid))) && (
-                <ScoreForm
-                  onSubmit={(homeScore, awayScore) =>
-                    run(() => reportMatchResult(leagueId, match.id, homeScore, awayScore))
-                  }
-                />
-              )}
-            {match.status === 'scheduled' &&
-              role !== 'admin' &&
-              !(user && match.involvedManagerUids.includes(user.uid)) &&
-              'ยังไม่แข่ง'}
-          </li>
-        ))}
-      </ul>
-
-      <h2>คำขอฉีกสัญญา (คิวรอ เปิดเผยผลตอนจบฤดูกาล)</h2>
-      <ul>
-        {tearRequests.length === 0 && <li>ไม่มีคำขอ</li>}
-        {tearRequests
-          .filter((t) => t.season === league.currentSeason)
-          .map((t) => (
-            <li key={t.id}>
-              {t.requesterTeamName} ยื่นฉีกสัญญาดึง {t.playerName} จาก {t.targetTeamName} — สถานะ:{' '}
-              {t.status}
-            </li>
-          ))}
-      </ul>
-
-      <h2>ประมูล</h2>
-      <ul>
-        {auctionListings.length === 0 && <li>ไม่มีรายการประมูล</li>}
-        {auctionListings.map((listing) => {
-          const canBid =
-            listing.status === 'open' && !!myTeam && myTeam.id !== listing.sellerTeamId
-          return (
-            <li key={listing.id}>
-              {listing.sellerTeamName} ส่ง {listing.playerName} ({listing.playerPosition}) เข้าประมูล
-              ราคาเริ่ม {listing.startingPrice} — สถานะ: {listing.status}
-              {listing.highestBid !== null &&
-                ` (สูงสุด ${listing.highestBid} โดย ${listing.highestBidderTeamName})`}
-              {listing.status === 'pending_approval' && role === 'admin' && (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => run(() => approveAuctionListing(leagueId, listing.id))}
-                  >
-                    อนุมัติ
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => run(() => rejectAuctionListing(leagueId, listing.id))}
-                  >
-                    ปฏิเสธ
-                  </button>
-                </>
-              )}
-              {canBid && myTeam && (
-                <BidForm
-                  minAmount={(listing.highestBid ?? listing.startingPrice - 1) + 1}
-                  onSubmit={(amount) =>
-                    run(() => placeBid(leagueId, listing.id, myTeam.id, myTeam.name, amount))
-                  }
-                />
-              )}
-              {listing.status === 'open' && role === 'admin' && (
-                <button type="button" onClick={() => run(() => closeAuction(leagueId, listing.id))}>
-                  ปิดประมูล
-                </button>
-              )}
-            </li>
-          )
-        })}
-      </ul>
-
-      <h2>ถ้วย</h2>
-      <ul>
-        {cups.length === 0 && <li>ไม่มีถ้วย</li>}
-        {cups.map((cup) => (
-          <li key={cup.id}>
-            <Link to={`/leagues/${leagueId}/cups/${cup.id}`}>
-              {cup.name} ({cup.type === 'major' ? 'ถ้วยใหญ่' : 'ถ้วยเล็ก'})
-            </Link>{' '}
-            — สถานะ: {cup.status === 'completed' ? 'จบแล้ว' : 'กำลังแข่ง'}
-          </li>
-        ))}
-      </ul>
-      {role === 'admin' && (
-        <CreateCupForm
-          teams={teams}
-          onSubmit={(input) =>
-            run(() => createCup(leagueId, { ...input, season: league.currentSeason }))
-          }
-        />
+          </thead>
+          <tbody>
+            {standings.map((row) => (
+              <tr key={row.teamId}>
+                <td>
+                  <Link to={`/leagues/${leagueId}/teams/${row.teamId}`}>{row.teamName}</Link>{' '}
+                  {teamsById.get(row.teamId)?.isForfeited && <Badge tone="neutral">ฟอส</Badge>}
+                </td>
+                <td>{row.played}</td>
+                <td>{row.won}</td>
+                <td>{row.drawn}</td>
+                <td>{row.lost}</td>
+                <td>{row.goalDifference}</td>
+                <td>{row.points}</td>
+                <td>
+                  <span className="form-dots">
+                    {last5Form(row.teamId).map((result, i) => (
+                      <span key={i} className={`form-dot form-dot--${result}`} title={result} />
+                    ))}
+                  </span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       )}
 
-      {role === 'admin' && (
+      {activeTab === 'fixtures' && (
+        <ul>
+          {matches.map((match) => (
+            <li key={match.id}>
+              นัดที่ {match.matchday}: {teamsById.get(match.homeTeamId)?.name ?? match.homeTeamId} vs{' '}
+              {teamsById.get(match.awayTeamId)?.name ?? match.awayTeamId} —{' '}
+              {match.status === 'played' && `${match.homeScore} - ${match.awayScore}`}
+              {match.status === 'bye' && <Badge tone="neutral">บาย</Badge>}
+              {match.status === 'scheduled' &&
+                (role === 'admin' || (user && match.involvedManagerUids.includes(user.uid))) && (
+                  <ScoreForm
+                    onSubmit={(homeScore, awayScore) =>
+                      run(() => reportMatchResult(leagueId, match.id, homeScore, awayScore))
+                    }
+                  />
+                )}
+              {match.status === 'scheduled' &&
+                role !== 'admin' &&
+                !(user && match.involvedManagerUids.includes(user.uid)) && (
+                  <Badge tone="neutral">ยังไม่แข่ง</Badge>
+                )}
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {activeTab === 'market' && (
+        <>
+          <Card style={{ marginBottom: 16 }}>
+            <CardHeader title="คำขอฉีกสัญญา (คิวรอ เปิดเผยผลตอนจบฤดูกาล)" />
+            <CardBody>
+              <ul style={{ margin: 0 }}>
+                {tearRequests.length === 0 && <li>ไม่มีคำขอ</li>}
+                {tearRequests
+                  .filter((t) => t.season === league.currentSeason)
+                  .map((t) => (
+                    <li key={t.id}>
+                      {t.requesterTeamName} ยื่นฉีกสัญญาดึง {t.playerName} จาก {t.targetTeamName}{' '}
+                      <Badge tone={TEAR_STATUS_TONE[t.status]}>{TEAR_STATUS_LABEL[t.status]}</Badge>
+                    </li>
+                  ))}
+              </ul>
+            </CardBody>
+          </Card>
+
+          <Card>
+            <CardHeader title="ประมูล" />
+            <CardBody>
+              <ul style={{ margin: 0 }}>
+                {auctionListings.length === 0 && <li>ไม่มีรายการประมูล</li>}
+                {auctionListings.map((listing) => {
+                  const canBid =
+                    listing.status === 'open' && !!myTeam && myTeam.id !== listing.sellerTeamId
+                  return (
+                    <li key={listing.id}>
+                      {listing.sellerTeamName} ส่ง {listing.playerName} ({listing.playerPosition}) เข้าประมูล
+                      ราคาเริ่ม {listing.startingPrice}{' '}
+                      <Badge tone={AUCTION_STATUS_TONE[listing.status]}>
+                        {AUCTION_STATUS_LABEL[listing.status]}
+                      </Badge>
+                      {listing.highestBid !== null &&
+                        ` (สูงสุด ${listing.highestBid} โดย ${listing.highestBidderTeamName})`}
+                      {listing.status === 'pending_approval' && role === 'admin' && (
+                        <>
+                          <Button
+                            variant="primary"
+                            onClick={() => run(() => approveAuctionListing(leagueId, listing.id))}
+                          >
+                            อนุมัติ
+                          </Button>
+                          <Button
+                            variant="danger"
+                            onClick={() => run(() => rejectAuctionListing(leagueId, listing.id))}
+                          >
+                            ปฏิเสธ
+                          </Button>
+                        </>
+                      )}
+                      {canBid && myTeam && (
+                        <BidForm
+                          minAmount={(listing.highestBid ?? listing.startingPrice - 1) + 1}
+                          onSubmit={(amount) =>
+                            run(() => placeBid(leagueId, listing.id, myTeam.id, myTeam.name, amount))
+                          }
+                        />
+                      )}
+                      {listing.status === 'open' && role === 'admin' && (
+                        <Button variant="secondary" onClick={() => run(() => closeAuction(leagueId, listing.id))}>
+                          ปิดประมูล
+                        </Button>
+                      )}
+                    </li>
+                  )
+                })}
+              </ul>
+            </CardBody>
+          </Card>
+        </>
+      )}
+
+      {activeTab === 'cups' && (
+        <>
+          <ul>
+            {cups.length === 0 && <li>ไม่มีถ้วย</li>}
+            {cups.map((cup) => (
+              <li key={cup.id}>
+                <Link to={`/leagues/${leagueId}/cups/${cup.id}`}>
+                  {cup.name} ({cup.type === 'major' ? 'ถ้วยใหญ่' : 'ถ้วยเล็ก'})
+                </Link>{' '}
+                <Badge tone={cup.status === 'completed' ? 'success' : 'accent'}>
+                  {cup.status === 'completed' ? 'จบแล้ว' : 'กำลังแข่ง'}
+                </Badge>
+              </li>
+            ))}
+          </ul>
+          {role === 'admin' && (
+            <CreateCupForm
+              teams={teams}
+              onSubmit={(input) =>
+                run(() => createCup(leagueId, { ...input, season: league.currentSeason }))
+              }
+            />
+          )}
+        </>
+      )}
+
+      {activeTab === 'teams' && role === 'admin' && (
         <section>
-          <h2>จัดการทีม</h2>
           <ul>
             {teams.map((team) => (
               <li key={team.id}>
@@ -329,10 +422,20 @@ export default function LeagueDetailPage() {
               </li>
             ))}
           </ul>
-          <AddTeamForm
-            onSubmit={(input) => run(() => createTeam(leagueId, input))}
-          />
+          <AddTeamForm onSubmit={(input) => run(() => createTeam(leagueId, input))} />
         </section>
+      )}
+
+      {activeTab === 'settings' && role === 'admin' && (
+        <LeagueSettingsForm
+          league={league}
+          onSubmit={(settings) =>
+            run(async () => {
+              await updateLeagueSettings(leagueId, settings)
+              toast.success('บันทึกการตั้งค่าลีกแล้ว')
+            })
+          }
+        />
       )}
     </main>
   )
@@ -453,7 +556,9 @@ function LeagueSettingsForm({
         />
       </label>
       <br />
-      <button type="submit">บันทึกการตั้งค่า</button>
+      <Button type="submit" variant="primary">
+        บันทึกการตั้งค่า
+      </Button>
     </form>
   )
 }
@@ -472,9 +577,9 @@ function EditTeamForm({
 
   if (!editing) {
     return (
-      <button type="button" onClick={() => setEditing(true)}>
+      <Button variant="secondary" onClick={() => setEditing(true)}>
         แก้ไข
-      </button>
+      </Button>
     )
   }
 
@@ -499,10 +604,12 @@ function EditTeamForm({
         onChange={(e) => setManagerName(e.target.value)}
         required
       />
-      <button type="submit">บันทึก</button>
-      <button type="button" onClick={() => setEditing(false)}>
+      <Button type="submit" variant="primary">
+        บันทึก
+      </Button>
+      <Button variant="ghost" onClick={() => setEditing(false)}>
         ยกเลิก
-      </button>
+      </Button>
     </form>
   )
 }
@@ -535,7 +642,9 @@ function ScoreForm({ onSubmit }: { onSubmit: (homeScore: number, awayScore: numb
         required
         style={{ width: '3em' }}
       />
-      <button type="submit">บันทึกผล</button>
+      <Button type="submit" variant="primary">
+        บันทึกผล
+      </Button>
     </form>
   )
 }
@@ -586,9 +695,9 @@ function CreateCupForm({
           {t.name}
         </label>
       ))}
-      <button type="submit" disabled={selected.length < 2}>
+      <Button type="submit" variant="primary" disabled={selected.length < 2}>
         สร้างถ้วย
-      </button>
+      </Button>
     </form>
   )
 }
@@ -617,7 +726,9 @@ function BidForm({
         required
         style={{ width: '6em' }}
       />
-      <button type="submit">ประมูล</button>
+      <Button type="submit" variant="primary">
+        ประมูล
+      </Button>
     </form>
   )
 }
@@ -669,7 +780,9 @@ function AddTeamForm({
         required
         style={{ width: '9em' }}
       />
-      <button type="submit">เพิ่มทีม</button>
+      <Button type="submit" variant="primary">
+        เพิ่มทีม
+      </Button>
     </form>
   )
 }

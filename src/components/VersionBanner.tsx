@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { Button } from '@/components/ui/Button'
 import { subscribeAppVersion } from '@/features/appVersion/api'
 
 export function VersionBanner() {
@@ -23,14 +24,23 @@ export function VersionBanner() {
   if (!hasNewVersion) return null
 
   return (
-    <div role="alert" style={{ background: '#fff3b0', padding: '0.5rem 1rem', textAlign: 'center' }}>
+    <div
+      role="alert"
+      style={{
+        background: 'var(--warning-bg)',
+        borderBottom: '1px solid var(--warning-border)',
+        color: 'var(--warning)',
+        padding: '10px 16px',
+        textAlign: 'center',
+      }}
+    >
       มีเวอร์ชันใหม่ของระบบ{' '}
-      <button type="button" onClick={() => window.location.reload()}>
+      <Button variant="primary" onClick={() => window.location.reload()}>
         รีเฟรชตอนนี้
-      </button>{' '}
-      <button type="button" onClick={() => setDismissedMs(latestMs)}>
+      </Button>{' '}
+      <Button variant="ghost" onClick={() => setDismissedMs(latestMs)}>
         ปิด
-      </button>
+      </Button>
     </div>
   )
 }
