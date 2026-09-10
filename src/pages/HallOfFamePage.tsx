@@ -65,18 +65,21 @@ export default function HallOfFamePage() {
       {notice && <p>{notice}</p>}
 
       <h2>เจ้าแห่งความสำเร็จ</h2>
-      <ul>
+      {CATEGORIES.every((category) => !categoryLeaders.get(category)?.length) && <p>ยังไม่มีข้อมูล</p>}
+      <div className="stat-grid">
         {CATEGORIES.map((category) => {
           const leaders = categoryLeaders.get(category)
           if (!leaders || leaders.length === 0) return null
           return (
-            <li key={category}>
-              <strong>{CHAMPION_CATEGORY_LABELS[category]}</strong> ({leaders[0].count} แชมป์): {' '}
-              {leaders.map((l) => l.managerName).join(', ')}
-            </li>
+            <div className="award-card" key={category}>
+              <div className="award-card__title">
+                {CHAMPION_CATEGORY_LABELS[category]} ({leaders[0].count} แชมป์)
+              </div>
+              <div className="award-card__names">{leaders.map((l) => l.managerName).join(', ')}</div>
+            </div>
           )
         })}
-      </ul>
+      </div>
 
       <h2>ตารางเกียรติยศ</h2>
       <ul>

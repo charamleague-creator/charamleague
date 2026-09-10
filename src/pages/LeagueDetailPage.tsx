@@ -71,6 +71,23 @@ export default function LeagueDetailPage() {
   const standings = computeStandings(matches, teams)
   const myTeam = teams.find((t) => !!user && t.managerUid === user.uid)
 
+  // การ์ดสรุป + คอลัมน์ "ฟอร์ม" (เอกสาร phase 08) — สรุป/จัดเรียงข้อมูลที่คำนวณจาก standings/matches
+  // อยู่แล้วเพื่อแสดงผลเท่านั้น ไม่แตะตรรกะการคำนวณคะแนน/ผลแข่งใดๆ
+  const playedMatches = matches.filter((m) => m.status === 'played')
+  const totalGoals = playedMatches.reduce((sum, m) => sum + (m.homeScore ?? 0) + (m.awayScore ?? 0), 0)
+
+  function last5Form(teamId: string): Array<'win' | 'draw' | 'loss'> {
+    return playedMatches
+      .filter((m) => m.homeTeamId === teamId || m.awayTeamId === teamId)
+      .slice(-5)
+      .map((m) => {
+        const isHome = m.homeTeamId === teamId
+        const my = isHome ? m.homeScore! : m.awayScore!
+        const opp = isHome ? m.awayScore! : m.homeScore!
+        return my > opp ? 'win' : my < opp ? 'loss' : 'draw'
+      })
+  }
+
   async function run(action: () => Promise<unknown>) {
     setError(null)
     try {
@@ -87,6 +104,36 @@ export default function LeagueDetailPage() {
       </h1>
       <p>สถานะ: {league.status === 'in_season' ? 'กำลังแข่งขัน' : 'ตลาดเปิด'}</p>
       {error && <p role="alert">{error}</p>}
+
+      <div className="stat-grid">
+        <div className="stat-card">
+          <div className="stat-card__icon" style={{ background: 'var(--accent-bg)', color: 'var(--accent-strong)' }}>
+            👥
+          </div>
+          <div>
+            <div className="stat-card__value">{teams.length}</div>
+            <p className="stat-card__label">ทีมทั้งหมด</p>
+          </div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-card__icon" style={{ background: 'rgba(34, 197, 94, 0.15)', color: 'var(--success)' }}>
+            📅
+          </div>
+          <div>
+            <div className="stat-card__value">{playedMatches.length}</div>
+            <p className="stat-card__label">นัดที่แข่งแล้ว</p>
+          </div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-card__icon" style={{ background: 'rgba(242, 193, 78, 0.15)', color: 'var(--gold)' }}>
+            ⚽
+          </div>
+          <div>
+            <div className="stat-card__value">{totalGoals}</div>
+            <p className="stat-card__label">ประตูรวม</p>
+          </div>
+        </div>
+      </div>
 
       {role === 'admin' && (
         <section>
@@ -120,6 +167,7 @@ export default function LeagueDetailPage() {
             <th>แพ้</th>
             <th>+/-</th>
             <th>แต้ม</th>
+            <th>ฟอร์ม</th>
           </tr>
         </thead>
         <tbody>
@@ -135,6 +183,13 @@ export default function LeagueDetailPage() {
               <td>{row.lost}</td>
               <td>{row.goalDifference}</td>
               <td>{row.points}</td>
+              <td>
+                <span className="form-dots">
+                  {last5Form(row.teamId).map((result, i) => (
+                    <span key={i} className={`form-dot form-dot--${result}`} title={result} />
+                  ))}
+                </span>
+              </td>
             </tr>
           ))}
         </tbody>
